@@ -1,0 +1,7 @@
+[package]
+name = "biter"
+version = "0.0.0"
+edition = "2021"
+description = "BitTorrent client written in Rust"
+
+[dependencies]
