@@ -24,15 +24,15 @@ impl fmt::Debug for BencodeValue {
 }
 
 pub fn parse_bencoded(bencoded: Vec<u8>) -> (Option<BencodeValue>, Vec<u8>) {
-    let next = bencoded.iter().next().unwrap();
+    let next = bencoded.first().unwrap();
     match *next as char {
         c if c.is_ascii_digit() => parse_string(bencoded),
-        c if c == 'i' => parse_int(bencoded),
-        c if c == 'l' => parse_list(bencoded),
-        c if c == 'd' => parse_dict(bencoded),
+        'i' => parse_int(bencoded),
+        'l' => parse_list(bencoded),
+        'd' => parse_dict(bencoded),
         _ => {
             eprintln!("unexpected character `{}`", *next as char);
-            return (None, bencoded);
+            (None, bencoded)
         }
     }
 }
@@ -180,6 +180,7 @@ pub fn parse_dict(bencoded: Vec<u8>) -> (Option<BencodeValue>, Vec<u8>) {
     )
 }
 
+#[cfg(test)]
 mod test {
     use super::*;
 

@@ -11,6 +11,6 @@ fn main() {
         if !left.is_empty() {
             panic!("trailing bencoded data: {}", String::from_utf8(left).unwrap());
         }
-        println!("{:#?}", metadata);
+        println!("{metadata:#?}");
     }
 }
