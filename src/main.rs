@@ -8,7 +8,7 @@ mod bencode;
 mod metainfo;
 
 fn main() {
-    let path = PathBuf::from("data/Learn You a Haskell for Great Good!.torrent");
+    let path = PathBuf::from("data/academic_test.torrent");
     let bencoded = fs::read(path).unwrap();
     let metainfo_dict = match parse_bencoded(bencoded) {
         (Some(metadata), left) if left.is_empty() => metadata,
@@ -19,5 +19,5 @@ fn main() {
         Ok(info) => info,
         Err(e) => panic!("metadata file structure error: {e}"),
     };
-    println!("{metainfo:?}");
+    println!("{metainfo:#?}");
 }

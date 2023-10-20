@@ -19,21 +19,34 @@ pub struct PieceHash(Vec<u8>);
 
 impl fmt::Debug for PieceHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0
-            .iter()
-            .take(1)
-            .map(|c| format!("{:x?}", c))
-            .collect::<String>()
-            .fmt(f)
+        write!(
+            f,
+            "#{}",
+            self.0
+                .iter()
+                .map(|c| format!("{:x?}", c))
+                .collect::<String>()
+        )
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash)]
 pub struct Info {
     pub piece_length: i64,
     pub pieces: Vec<PieceHash>,
     pub file_info: FileInfo,
     pub private: Option<bool>,
+}
+
+impl fmt::Debug for Info {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Info")
+            .field("piece_length", &self.piece_length)
+            .field("pieces", &format!("<{} hidden>", self.pieces.len()))
+            .field("file_info", &self.file_info)
+            .field("private", &self.private)
+            .finish()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -45,7 +58,7 @@ pub enum FileInfo {
     },
     Multi {
         name: String,
-        files: FilesInfo,
+        files: Vec<FilesInfo>,
     },
 }
 
@@ -85,10 +98,7 @@ impl TryFrom<BencodeValue> for Metainfo {
         let file_info = if info_dict.get("files").is_some() {
             FileInfo::Multi {
                 name,
-                files: match parse_files_info(info_dict.get("files").unwrap().clone()) {
-                    Ok(fi) => fi,
-                    Err(e) => return Err(e),
-                },
+                files: parse_files_info(info_dict.get("files").unwrap().clone())?,
             }
         } else {
             FileInfo::Single {
@@ -133,6 +143,38 @@ impl TryFrom<BencodeValue> for Metainfo {
     }
 }
 
-fn parse_files_info(_value: BencodeValue) -> Result<FilesInfo, String> {
-    todo!("parse files info")
+fn parse_files_info(value: BencodeValue) -> Result<Vec<FilesInfo>, String> {
+    match value {
+        BencodeValue::List(l) => l
+            .iter()
+            .map(|i| match i {
+                BencodeValue::Dict(d) => {
+                    let path = match d.get("path") {
+                        Some(BencodeValue::List(p)) => p
+                            .iter()
+                            .map(|dir| match dir {
+                                BencodeValue::String(dir) => match String::from_utf8(dir.clone()) {
+                                    Ok(str) => Ok(PathBuf::from(str)),
+                                    _ => Err("'path' is not utf-8".into()),
+                                },
+                                _ => Err("'path' item is not a string".into()),
+                            })
+                            .collect::<Result<PathBuf, String>>()?,
+                        _ => return Err("'path' is not a list".into()),
+                    };
+                    Ok(FilesInfo {
+                        length: match d.get("length") {
+                            Some(BencodeValue::Int(v)) => *v,
+                            _ => return Err("'length' missing".into()),
+                        },
+                        path,
+                        // TODO
+                        md5_sum: None,
+                    })
+                }
+                _ => Err("'files' item is not a dict".into()),
+            })
+            .collect(),
+        _ => Err("'files' is not a list".into()),
+    }
 }
