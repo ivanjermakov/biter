@@ -1,16 +1,23 @@
 use std::{fs, path::PathBuf};
 
-use crate::bencode::parse_bencoded;
+use bencode::parse_bencoded;
+
+use crate::metainfo::Metainfo;
 
 mod bencode;
+mod metainfo;
 
 fn main() {
-    let path = PathBuf::from("data/archlinux-2023.10.14-x86_64.iso.torrent");
+    let path = PathBuf::from("data/Learn You a Haskell for Great Good!.torrent");
     let bencoded = fs::read(path).unwrap();
-    if let (Some(metadata), left) = parse_bencoded(bencoded) {
-        if !left.is_empty() {
-            panic!("trailing bencoded data: {}", String::from_utf8(left).unwrap());
-        }
-        println!("{metadata:#?}");
-    }
+    let metainfo_dict = match parse_bencoded(bencoded) {
+        (Some(metadata), left) if left.is_empty() => metadata,
+        _ => panic!("metadata file parsing error"),
+    };
+    println!("{metainfo_dict:#?}");
+    let metainfo = match Metainfo::try_from(metainfo_dict) {
+        Ok(info) => info,
+        Err(e) => panic!("metadata file structure error: {e}"),
+    };
+    println!("{metainfo:?}");
 }

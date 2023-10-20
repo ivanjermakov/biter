@@ -1,7 +1,7 @@
 use core::fmt;
 use std::{collections::BTreeMap, vec};
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum BencodeValue {
     String(Vec<u8>),
     Int(i64),
