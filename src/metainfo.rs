@@ -1,7 +1,7 @@
 use core::fmt;
 use std::path::PathBuf;
 
-use crate::bencode::BencodeValue;
+use crate::{bencode::BencodeValue, hex::hex, types::ByteString};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Metainfo {
@@ -15,18 +15,11 @@ pub struct Metainfo {
 }
 
 #[derive(PartialEq, Eq, Hash)]
-pub struct PieceHash(Vec<u8>);
+pub struct PieceHash(ByteString);
 
 impl fmt::Debug for PieceHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "#{}",
-            self.0
-                .iter()
-                .map(|c| format!("{:x?}", c))
-                .collect::<String>()
-        )
+        write!(f, "#{}", hex(&self.0))
     }
 }
 
@@ -34,6 +27,7 @@ impl fmt::Debug for PieceHash {
 pub struct Info {
     pub piece_length: i64,
     pub pieces: Vec<PieceHash>,
+    pub name: String,
     pub file_info: FileInfo,
     pub private: Option<bool>,
 }
@@ -52,12 +46,10 @@ impl fmt::Debug for Info {
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum FileInfo {
     Single {
-        name: String,
         length: i64,
         md5_sum: Option<String>,
     },
     Multi {
-        name: String,
         files: Vec<FilesInfo>,
     },
 }
@@ -90,19 +82,15 @@ impl TryFrom<BencodeValue> for Metainfo {
             _ => return Err("'pieces' missing".into()),
         };
         let name = match info_dict.get("name") {
-            Some(BencodeValue::String(s)) => {
-                String::from_utf8(s.clone()).map_err(|_| "'name' is not utf-8")?
-            }
+            Some(BencodeValue::String(s)) => String::from_utf8_lossy(s.as_slice()).into(),
             _ => return Err("'name' missing".into()),
         };
         let file_info = if info_dict.get("files").is_some() {
             FileInfo::Multi {
-                name,
                 files: parse_files_info(info_dict.get("files").unwrap().clone())?,
             }
         } else {
             FileInfo::Single {
-                name,
                 length: match info_dict.get("length") {
                     Some(BencodeValue::Int(v)) => *v,
                     _ => return Err("'length' missing".into()),
@@ -118,14 +106,13 @@ impl TryFrom<BencodeValue> for Metainfo {
                     _ => return Err("'piece length' missing".into()),
                 },
                 pieces,
+                name,
                 file_info,
                 // TODO
                 private: None,
             },
             announce: match dict.get("announce") {
-                Some(BencodeValue::String(s)) => {
-                    String::from_utf8(s.clone()).map_err(|_| "'announce' is not utf-8")?
-                }
+                Some(BencodeValue::String(s)) => String::from_utf8_lossy(s.as_slice()).into(),
                 _ => return Err("'announce' missing".into()),
             },
             // TODO
@@ -153,10 +140,9 @@ fn parse_files_info(value: BencodeValue) -> Result<Vec<FilesInfo>, String> {
                         Some(BencodeValue::List(p)) => p
                             .iter()
                             .map(|dir| match dir {
-                                BencodeValue::String(dir) => match String::from_utf8(dir.clone()) {
-                                    Ok(str) => Ok(PathBuf::from(str)),
-                                    _ => Err("'path' is not utf-8".into()),
-                                },
+                                BencodeValue::String(dir) => Ok(PathBuf::from(
+                                    String::from_utf8_lossy(dir.as_slice()).to_string(),
+                                )),
                                 _ => Err("'path' item is not a string".into()),
                             })
                             .collect::<Result<PathBuf, String>>()?,
