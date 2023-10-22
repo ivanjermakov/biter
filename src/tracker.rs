@@ -203,8 +203,7 @@ pub fn tracker_request(
     announce: String,
     request: TrackerRequest,
 ) -> Result<TrackerResponse, String> {
-    let params = request.to_params();
-    let query = format!(
+    let params = format!(
         "?{}",
         request
             .to_params()
@@ -213,14 +212,15 @@ pub fn tracker_request(
             .collect::<Vec<_>>()
             .join("&")
     );
-    println!("params: {params:?}");
+    let url = format!("{announce}{params}");
+    println!("url: {url}");
     let resp = Client::new()
-        .get(format!("{announce}{query}"))
+        .get(url)
         .send()
         .map_err(|e| format!("request error: {}", e))?
         .bytes()
         .map_err(|e| format!("request body error: {}", e))?;
-    println!("{}", String::from_utf8_lossy(&resp));
+    println!("raw response: {}", String::from_utf8_lossy(&resp));
     let resp_dict = parse_bencoded(resp.to_vec())
         .0
         .ok_or("Malformed response")?;
