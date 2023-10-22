@@ -168,19 +168,19 @@ impl TryFrom<BencodeValue> for TrackerResponse {
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct TrackerResponseSuccess {
-    peers: Vec<TrackerPeer>,
-    interval: i64,
-    warning_message: Option<String>,
-    min_interval: Option<i64>,
-    tracker_id: Option<ByteString>,
-    complete: Option<i64>,
-    incomplete: Option<i64>,
+    pub peers: Vec<TrackerPeer>,
+    pub interval: i64,
+    pub warning_message: Option<String>,
+    pub min_interval: Option<i64>,
+    pub tracker_id: Option<ByteString>,
+    pub complete: Option<i64>,
+    pub incomplete: Option<i64>,
 }
 
 pub struct TrackerPeer {
-    peer_id: ByteString,
-    ip: String,
-    port: i64,
+    pub peer_id: ByteString,
+    pub ip: String,
+    pub port: i64,
 }
 
 impl fmt::Debug for TrackerPeer {
@@ -217,9 +217,10 @@ pub fn tracker_request(
     let resp = Client::new()
         .get(format!("{announce}{query}"))
         .send()
-        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("request error: {}", e))?
         .bytes()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("request body error: {}", e))?;
+    println!("{}", String::from_utf8_lossy(&resp));
     let resp_dict = parse_bencoded(resp.to_vec())
         .0
         .ok_or("Malformed response")?;

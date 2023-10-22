@@ -1,3 +1,4 @@
+use peer::handshake;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::{fs, path::PathBuf};
 
@@ -6,12 +7,13 @@ use types::ByteString;
 
 use crate::{
     metainfo::Metainfo,
-    tracker::{tracker_request, TrackerRequest},
+    tracker::{tracker_request, TrackerRequest, TrackerResponse},
 };
 
 mod bencode;
 mod hex;
 mod metainfo;
+mod peer;
 mod sha1;
 mod tracker;
 mod types;
@@ -23,12 +25,12 @@ fn main() {
         (Some(metadata), left) if left.is_empty() => metadata,
         _ => panic!("metadata file parsing error"),
     };
-    println!("{metainfo_dict:#?}");
+    println!("{metainfo_dict:?}");
     let metainfo = match Metainfo::try_from(metainfo_dict.clone()) {
         Ok(info) => info,
         Err(e) => panic!("metadata file structure error: {e}"),
     };
-    println!("{metainfo:#?}");
+    println!("{metainfo:?}");
     let info_dict_str = match metainfo_dict {
         bencode::BencodeValue::Dict(d) => d.get("info").unwrap().encode(),
         _ => unreachable!(),
@@ -38,10 +40,26 @@ fn main() {
     println!("peer id {}", String::from_utf8_lossy(peer_id.as_slice()));
     let tracker_response = tracker_request(
         metainfo.announce,
-        TrackerRequest::new(info_hash, peer_id, tracker::TrackerEvent::Started, None),
+        TrackerRequest::new(
+            info_hash.clone(),
+            peer_id.clone(),
+            tracker::TrackerEvent::Started,
+            None,
+        ),
     )
     .expect("request failed");
     println!("tracker response: {tracker_response:?}");
+    if let TrackerResponse::Success(resp) = tracker_response {
+        for p in resp.peers {
+            match handshake(&p, &info_hash, &peer_id) {
+                Ok(_) => {
+                    println!("successfull handshake with peer {:?}", p);
+                    break;
+                }
+                Err(e) => eprintln!("{}", e),
+            }
+        }
+    }
 }
 
 /// Generate random 20 byte string, starting with -<2 byte client name><4 byte client version>-
