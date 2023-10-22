@@ -1,12 +1,53 @@
 use core::fmt;
 use std::{collections::BTreeMap, vec};
 
+use crate::types::ByteString;
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum BencodeValue {
-    String(Vec<u8>),
+    String(ByteString),
     Int(i64),
     List(Vec<BencodeValue>),
     Dict(BTreeMap<String, BencodeValue>),
+}
+
+impl BencodeValue {
+    pub fn encode(&self) -> ByteString {
+        match self {
+            BencodeValue::String(s) => {
+                [s.len().to_string().as_bytes(), ":".as_bytes(), s.as_slice()].concat()
+            }
+            BencodeValue::Int(i) => {
+                ["i".as_bytes(), i.to_string().as_bytes(), "e".as_bytes()].concat()
+            }
+            BencodeValue::List(l) => vec![
+                "l".as_bytes().to_vec(),
+                l.iter().flat_map(|v| v.encode()).collect(),
+                "e".as_bytes().to_vec(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            BencodeValue::Dict(d) => vec![
+                "d".as_bytes().to_vec(),
+                d.iter()
+                    .flat_map(|(k, v)| {
+                        [
+                            BencodeValue::String(k.as_bytes().to_vec())
+                                .encode()
+                                .as_slice(),
+                            v.encode().as_slice(),
+                        ]
+                        .concat()
+                    })
+                    .collect(),
+                "e".as_bytes().to_vec(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+        }
+    }
 }
 
 impl fmt::Debug for BencodeValue {
@@ -23,7 +64,19 @@ impl fmt::Debug for BencodeValue {
     }
 }
 
-pub fn parse_bencoded(bencoded: Vec<u8>) -> (Option<BencodeValue>, Vec<u8>) {
+#[allow(dead_code)]
+pub fn bencode_string(value: ByteString) -> ByteString {
+    vec![
+        value.len().to_string().as_bytes().to_vec(),
+        ":".as_bytes().to_vec(),
+        value,
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+pub fn parse_bencoded(bencoded: ByteString) -> (Option<BencodeValue>, ByteString) {
     let next = bencoded.first().unwrap();
     match *next as char {
         c if c.is_ascii_digit() => parse_string(bencoded),
@@ -38,7 +91,7 @@ pub fn parse_bencoded(bencoded: Vec<u8>) -> (Option<BencodeValue>, Vec<u8>) {
 }
 
 /// Format: <string length encoded in base ten ASCII>:<string data>
-pub fn parse_string(bencoded: Vec<u8>) -> (Option<BencodeValue>, Vec<u8>) {
+pub fn parse_string(bencoded: ByteString) -> (Option<BencodeValue>, ByteString) {
     let mut i = 0;
 
     let size_chars = bencoded
@@ -57,7 +110,7 @@ pub fn parse_string(bencoded: Vec<u8>) -> (Option<BencodeValue>, Vec<u8>) {
     }
     i += 1;
 
-    let str: Vec<u8> = bencoded
+    let str: ByteString = bencoded
         .iter()
         .skip(size_chars.len() + 1)
         .take(size as usize)
@@ -72,7 +125,7 @@ pub fn parse_string(bencoded: Vec<u8>) -> (Option<BencodeValue>, Vec<u8>) {
 }
 
 /// Format: i<integer encoded in base ten ASCII>e
-pub fn parse_int(bencoded: Vec<u8>) -> (Option<BencodeValue>, Vec<u8>) {
+pub fn parse_int(bencoded: ByteString) -> (Option<BencodeValue>, ByteString) {
     let mut i = 0;
 
     if bencoded.get(i).filter(|c| (**c as char) == 'i').is_none() {
@@ -104,7 +157,7 @@ pub fn parse_int(bencoded: Vec<u8>) -> (Option<BencodeValue>, Vec<u8>) {
 }
 
 /// Format: l<bencoded values>e
-pub fn parse_list(bencoded: Vec<u8>) -> (Option<BencodeValue>, Vec<u8>) {
+pub fn parse_list(bencoded: ByteString) -> (Option<BencodeValue>, ByteString) {
     let mut i = 0;
     let mut items = vec![];
 
@@ -134,7 +187,7 @@ pub fn parse_list(bencoded: Vec<u8>) -> (Option<BencodeValue>, Vec<u8>) {
 }
 
 /// Format: d<bencoded string><bencoded element>e
-pub fn parse_dict(bencoded: Vec<u8>) -> (Option<BencodeValue>, Vec<u8>) {
+pub fn parse_dict(bencoded: ByteString) -> (Option<BencodeValue>, ByteString) {
     let mut i = 0;
     let mut map: BTreeMap<String, BencodeValue> = BTreeMap::new();
 
@@ -149,10 +202,7 @@ pub fn parse_dict(bencoded: Vec<u8>) -> (Option<BencodeValue>, Vec<u8>) {
         {
             i = bencoded.len() - left.len();
             match item {
-                BencodeValue::String(s) => match String::from_utf8(s) {
-                    Ok(s) => s,
-                    _ => return (None, bencoded),
-                },
+                BencodeValue::String(s) => String::from_utf8_lossy(s.as_slice()).to_string(),
                 _ => return (None, bencoded),
             }
         } else {
