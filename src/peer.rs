@@ -1,4 +1,5 @@
-use std::io::{self, BufReader, Read, Write};
+use anyhow::{Context, Error, Result, ensure};
+use std::io::{BufReader, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::str::FromStr;
 use std::time::Duration;
@@ -44,8 +45,8 @@ impl TryFrom<Vec<u8>> for HandshakePacket {
             return Err(format!("invalid pstr: {}", hex(pstr)));
         }
         Ok(HandshakePacket {
-            info_hash: value.as_slice()[29..48].to_vec(),
-            peer_id: value.as_slice()[49..68].to_vec(),
+            info_hash: value.as_slice()[28..48].to_vec(),
+            peer_id: value.as_slice()[48..68].to_vec(),
         })
     }
 }
@@ -54,7 +55,7 @@ pub fn handshake(
     peer: &TrackerPeer,
     info_hash: &ByteString,
     peer_id: &ByteString,
-) -> io::Result<HandshakePacket> {
+) -> Result<TcpStream> {
     let timeout = Duration::new(4, 0);
     println!("connecting to peer {peer:?}");
     let mut stream = TcpStream::connect_timeout(
@@ -70,30 +71,21 @@ pub fn handshake(
     .into();
 
     println!("writing handshake {}", hex(&handshake.to_vec()));
-    match stream.write_all(&handshake) {
-        Err(e) => {
-            eprintln!("write error: {}", e);
-            return Err(e);
-        }
-        _ => println!("write ok"),
-    };
+    stream.write_all(&handshake).context("write error")?;
     stream.flush()?;
 
-    let mut reader = BufReader::new(stream);
-    let mut read_packet = [0u8; 68];
+    let mut reader = BufReader::new(&stream);
+    let mut read_packet = [0; 68];
     println!("reading handshake");
-    match reader.read_exact(&mut read_packet) {
-        Ok(_) => {
-            let msg: Vec<u8> = read_packet.to_vec();
-            println!("peer response: {}", hex(&msg));
-            match HandshakePacket::try_from(msg) {
-                Ok(p) => Ok(p),
-                Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
-            }
-        }
-        Err(e) => {
-            eprintln!("read error: {}", e);
-            Err(e)
-        }
+    reader.read_exact(&mut read_packet).context("read error")?;
+    let msg: Vec<u8> = read_packet.to_vec();
+    println!("peer response: {}", hex(&msg));
+    let hp = HandshakePacket::try_from(msg)
+        .map_err(Error::msg)
+        .context("handshake parse error")?;
+    ensure!(hp.info_hash == *info_hash, "response `info_hash` differ");
+    if hp.peer_id != peer.peer_id {
+        println!("peer id differ")
     }
+    Ok(stream)
 }
