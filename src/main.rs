@@ -75,7 +75,7 @@ fn main() -> Result<()> {
                         )?;
                         match read_message(&stream) {
                             Ok(msg) => {
-                                debug!("message from peer {:?}: {:?}", p, msg);
+                                debug!("<<< message from peer {:?}: {:?}", p, msg);
                             }
                             Err(e) => {
                                 warn!("{}", e);

@@ -1,4 +1,5 @@
 use anyhow::{ensure, Context, Error, Result};
+use core::fmt;
 use std::io::{BufReader, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::str::FromStr;
@@ -7,6 +8,14 @@ use std::time::Duration;
 use crate::hex::hex;
 use crate::tracker::TrackerPeer;
 use crate::types::ByteString;
+
+pub struct Block(Vec<u8>);
+
+impl fmt::Debug for Block {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("<block>")
+    }
+}
 
 #[derive(Debug)]
 pub enum Message {
@@ -33,7 +42,7 @@ pub enum Message {
     Piece {
         piece_index: u32,
         begin: u32,
-        block: Vec<u8>,
+        block: Block,
     },
     Cancel {
         piece_index: u32,
@@ -85,11 +94,11 @@ impl From<Message> for Vec<u8> {
                 begin,
                 block,
             } => [
-                u32tb(9 + block.len() as u32).as_slice(),
+                u32tb(9 + block.0.len() as u32).as_slice(),
                 &[7],
                 &u32tb(piece_index),
                 &u32tb(begin),
-                &block,
+                &block.0,
             ]
             .concat(),
             Message::Cancel {
@@ -136,14 +145,16 @@ pub fn handshake(
     info_hash: &ByteString,
     peer_id: &ByteString,
 ) -> Result<TcpStream> {
-    let conn_timeout = Duration::new(4, 0);
+    let cn_timeout = Duration::new(4, 0);
+    let hs_timeout = Duration::new(4, 0);
     let rw_timeout = Duration::new(60, 0);
     debug!("connecting to peer {peer:?}");
     let mut stream = TcpStream::connect_timeout(
         &SocketAddr::new(IpAddr::from_str(&peer.ip)?, peer.port as u16),
-        conn_timeout,
+        cn_timeout,
     )?;
-    stream.set_read_timeout(Some(rw_timeout))?;
+    // special short timeout for the first read
+    stream.set_read_timeout(Some(hs_timeout))?;
     stream.set_write_timeout(Some(rw_timeout))?;
     let handshake: Vec<u8> = Message::Handshake {
         info_hash: info_hash.clone(),
@@ -172,6 +183,7 @@ pub fn handshake(
         if h_peer_id != peer.peer_id {
             debug!("peer id differ")
         }
+        stream.set_read_timeout(Some(rw_timeout))?;
         Ok(stream)
     } else {
         Err(Error::msg("unexpected message"))
@@ -220,7 +232,7 @@ pub fn read_message(mut stream: &TcpStream) -> Result<Message> {
                 7 if len > 9 => Ok(Message::Piece {
                     piece_index: u32_from_slice(&payload_p[0..4])?,
                     begin: u32_from_slice(&payload_p[4..8])?,
-                    block: payload_p[8..].to_vec(),
+                    block: Block(payload_p[8..].to_vec()),
                 }),
                 8 if len == 13 => Ok(Message::Cancel {
                     piece_index: u32_from_slice(&payload_p[0..4])?,
@@ -238,7 +250,7 @@ pub fn read_message(mut stream: &TcpStream) -> Result<Message> {
 }
 
 pub fn send_message(mut stream: &TcpStream, message: Message) -> Result<()> {
-    debug!("sending message: {:?}", message);
+    debug!(">>> sending message: {:?}", message);
     let msg_p: Vec<u8> = message.into();
     trace!("raw message: {}", hex(&msg_p));
     stream.write_all(&msg_p)?;
