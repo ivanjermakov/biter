@@ -47,6 +47,9 @@ pub enum Message {
 
 impl From<Message> for Vec<u8> {
     fn from(value: Message) -> Self {
+        fn u32tb(n: u32) -> Vec<u8> {
+            n.to_be_bytes().to_vec()
+        }
         match value {
             Message::Handshake { info_hash, peer_id } => {
                 let pstr = "BitTorrent protocol";
@@ -54,7 +57,54 @@ impl From<Message> for Vec<u8> {
                 let reserved = &[0u8; 8];
                 [pstrlen, pstr.as_bytes(), reserved, &info_hash, &peer_id].concat()
             }
-            _ => todo!(),
+            Message::KeepAlive => [u32tb(0).as_slice()].concat(),
+            Message::Choke => [u32tb(1).as_slice(), &[0]].concat(),
+            Message::Unchoke => [u32tb(1).as_slice(), &[1]].concat(),
+            Message::Interested => [u32tb(1).as_slice(), &[2]].concat(),
+            Message::NotInterested => [u32tb(1).as_slice(), &[3]].concat(),
+            Message::Have { piece_index } => {
+                [u32tb(5).as_slice(), &[4], &u32tb(piece_index)].concat()
+            }
+            Message::Bitfield { bitfield } => {
+                [u32tb(1 + bitfield.len() as u32).as_slice(), &[5], &bitfield].concat()
+            }
+            Message::Request {
+                piece_index,
+                begin,
+                length,
+            } => [
+                u32tb(13).as_slice(),
+                &[6],
+                &u32tb(piece_index),
+                &u32tb(begin),
+                &u32tb(length),
+            ]
+            .concat(),
+            Message::Piece {
+                piece_index,
+                begin,
+                block,
+            } => [
+                u32tb(9 + block.len() as u32).as_slice(),
+                &[7],
+                &u32tb(piece_index),
+                &u32tb(begin),
+                &block,
+            ]
+            .concat(),
+            Message::Cancel {
+                piece_index,
+                begin,
+                length,
+            } => [
+                u32tb(13).as_slice(),
+                &[8],
+                &u32tb(piece_index),
+                &u32tb(begin),
+                &u32tb(length),
+            ]
+            .concat(),
+            Message::Port { port } => [u32tb(3).as_slice(), &[9], &[port]].concat(),
         }
     }
 }
@@ -86,14 +136,15 @@ pub fn handshake(
     info_hash: &ByteString,
     peer_id: &ByteString,
 ) -> Result<TcpStream> {
-    let timeout = Duration::new(4, 0);
+    let conn_timeout = Duration::new(4, 0);
+    let rw_timeout = Duration::new(60, 0);
     debug!("connecting to peer {peer:?}");
     let mut stream = TcpStream::connect_timeout(
         &SocketAddr::new(IpAddr::from_str(&peer.ip)?, peer.port as u16),
-        timeout,
+        conn_timeout,
     )?;
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout))?;
+    stream.set_read_timeout(Some(rw_timeout))?;
+    stream.set_write_timeout(Some(rw_timeout))?;
     let handshake: Vec<u8> = Message::Handshake {
         info_hash: info_hash.clone(),
         peer_id: peer_id.clone(),
@@ -184,4 +235,12 @@ pub fn read_message(mut stream: &TcpStream) -> Result<Message> {
             }
         }
     }
+}
+
+pub fn send_message(mut stream: &TcpStream, message: Message) -> Result<()> {
+    debug!("sending message: {:?}", message);
+    let msg_p: Vec<u8> = message.into();
+    trace!("raw message: {}", hex(&msg_p));
+    stream.write_all(&msg_p)?;
+    Ok(())
 }
