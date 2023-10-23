@@ -1,5 +1,6 @@
 use core::fmt;
 
+use anyhow::{Context, Error, Result};
 use reqwest::blocking::Client;
 use urlencoding::encode_binary;
 
@@ -199,10 +200,7 @@ impl fmt::Debug for TrackerPeer {
     }
 }
 
-pub fn tracker_request(
-    announce: String,
-    request: TrackerRequest,
-) -> Result<TrackerResponse, String> {
+pub fn tracker_request(announce: String, request: TrackerRequest) -> Result<TrackerResponse> {
     let params = format!(
         "?{}",
         request
@@ -217,13 +215,13 @@ pub fn tracker_request(
     let resp = Client::new()
         .get(url)
         .send()
-        .map_err(|e| format!("request error: {}", e))?
+        .context("request error")?
         .bytes()
-        .map_err(|e| format!("request body error: {}", e))?;
+        .context("request body error")?;
     debug!("raw response: {}", String::from_utf8_lossy(&resp));
     let resp_dict = parse_bencoded(resp.to_vec())
         .0
-        .ok_or("Malformed response")?;
+        .context("Malformed response")?;
     debug!("response: {resp_dict:?}");
-    TrackerResponse::try_from(resp_dict)
+    TrackerResponse::try_from(resp_dict).map_err(Error::msg)
 }

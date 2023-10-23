@@ -77,7 +77,10 @@ pub fn bencode_string(value: ByteString) -> ByteString {
 }
 
 pub fn parse_bencoded(bencoded: ByteString) -> (Option<BencodeValue>, ByteString) {
-    let next = bencoded.first().unwrap();
+    let next = match bencoded.first() {
+        Some(f) => f,
+        _ => return (None, bencoded),
+    };
     match *next as char {
         c if c.is_ascii_digit() => parse_string(bencoded),
         'i' => parse_int(bencoded),

@@ -1,4 +1,4 @@
-use anyhow::{Context, Error, Result, ensure};
+use anyhow::{ensure, Context, Error, Result};
 use std::io::{BufReader, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::str::FromStr;
@@ -8,13 +8,13 @@ use crate::hex::hex;
 use crate::tracker::TrackerPeer;
 use crate::types::ByteString;
 
-pub struct HandshakePacket {
+pub struct PeerHandshake {
     info_hash: Vec<u8>,
     peer_id: Vec<u8>,
 }
 
-impl From<HandshakePacket> for Vec<u8> {
-    fn from(value: HandshakePacket) -> Self {
+impl From<PeerHandshake> for Vec<u8> {
+    fn from(value: PeerHandshake) -> Self {
         let pstr = "BitTorrent protocol";
         let pstrlen = &[pstr.len() as u8];
         let reserved = &[0u8; 8];
@@ -29,7 +29,7 @@ impl From<HandshakePacket> for Vec<u8> {
     }
 }
 
-impl TryFrom<Vec<u8>> for HandshakePacket {
+impl TryFrom<Vec<u8>> for PeerHandshake {
     type Error = String;
 
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
@@ -44,7 +44,7 @@ impl TryFrom<Vec<u8>> for HandshakePacket {
         if pstr != "BitTorrent protocol".as_bytes() {
             return Err(format!("invalid pstr: {}", hex(pstr)));
         }
-        Ok(HandshakePacket {
+        Ok(PeerHandshake {
             info_hash: value.as_slice()[28..48].to_vec(),
             peer_id: value.as_slice()[48..68].to_vec(),
         })
@@ -59,12 +59,12 @@ pub fn handshake(
     let timeout = Duration::new(4, 0);
     debug!("connecting to peer {peer:?}");
     let mut stream = TcpStream::connect_timeout(
-        &SocketAddr::new(IpAddr::from_str(&peer.ip).unwrap(), peer.port as u16),
+        &SocketAddr::new(IpAddr::from_str(&peer.ip)?, peer.port as u16),
         timeout,
     )?;
     stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(timeout))?;
-    let handshake: Vec<u8> = HandshakePacket {
+    let handshake: Vec<u8> = PeerHandshake {
         info_hash: info_hash.clone(),
         peer_id: peer_id.clone(),
     }
@@ -80,7 +80,7 @@ pub fn handshake(
     reader.read_exact(&mut read_packet).context("read error")?;
     let msg: Vec<u8> = read_packet.to_vec();
     debug!("peer response: {}", hex(&msg));
-    let hp = HandshakePacket::try_from(msg)
+    let hp = PeerHandshake::try_from(msg)
         .map_err(Error::msg)
         .context("handshake parse error")?;
     ensure!(hp.info_hash == *info_hash, "response `info_hash` differ");

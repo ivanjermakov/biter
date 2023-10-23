@@ -85,18 +85,19 @@ impl TryFrom<BencodeValue> for Metainfo {
             Some(BencodeValue::String(s)) => String::from_utf8_lossy(s.as_slice()).into(),
             _ => return Err("'name' missing".into()),
         };
-        let file_info = if info_dict.get("files").is_some() {
-            FileInfo::Multi {
-                files: parse_files_info(info_dict.get("files").unwrap().clone())?,
-            }
-        } else {
-            FileInfo::Single {
-                length: match info_dict.get("length") {
-                    Some(BencodeValue::Int(v)) => *v,
-                    _ => return Err("'length' missing".into()),
-                },
-                // TODO
-                md5_sum: None,
+        let file_info = match info_dict.get("files") {
+            Some(d) => FileInfo::Multi {
+                files: parse_files_info(d)?,
+            },
+            None => {
+                FileInfo::Single {
+                    length: match info_dict.get("length") {
+                        Some(BencodeValue::Int(v)) => *v,
+                        _ => return Err("'length' missing".into()),
+                    },
+                    // TODO
+                    md5_sum: None,
+                }
             }
         };
         let metainfo = Metainfo {
@@ -130,7 +131,7 @@ impl TryFrom<BencodeValue> for Metainfo {
     }
 }
 
-fn parse_files_info(value: BencodeValue) -> Result<Vec<FilesInfo>, String> {
+fn parse_files_info(value: &BencodeValue) -> Result<Vec<FilesInfo>, String> {
     match value {
         BencodeValue::List(l) => l
             .iter()

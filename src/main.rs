@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate log;
 
+use anyhow::{Context, Result};
 use peer::handshake;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::{fs, path::PathBuf};
@@ -21,11 +22,13 @@ mod sha1;
 mod tracker;
 mod types;
 
-fn main() {
-    env_logger::init();
+fn main() -> Result<()> {
+    env_logger::init_from_env(
+        env_logger::Env::default().filter_or(env_logger::DEFAULT_FILTER_ENV, "info"),
+    );
 
     let path = PathBuf::from("data/knoppix.torrent");
-    let bencoded = fs::read(path).unwrap();
+    let bencoded = fs::read(path).context("no metadata file")?;
     let metainfo_dict = match parse_bencoded(bencoded) {
         (Some(metadata), left) if left.is_empty() => metadata,
         _ => panic!("metadata file parsing error"),
@@ -37,7 +40,7 @@ fn main() {
     };
     info!("metainfo: {metainfo:?}");
     let info_dict_str = match metainfo_dict {
-        bencode::BencodeValue::Dict(d) => d.get("info").unwrap().encode(),
+        bencode::BencodeValue::Dict(d) => d.get("info").context("no 'info' key")?.encode(),
         _ => unreachable!(),
     };
     let info_hash = sha1::encode(info_dict_str);
@@ -52,16 +55,21 @@ fn main() {
             None,
         ),
     )
-    .expect("request failed");
+    .context("request failed")?;
     info!("tracker response: {tracker_response:?}");
+
     if let TrackerResponse::Success(resp) = tracker_response {
         for p in resp.peers {
             match handshake(&p, &info_hash, &peer_id) {
-                Ok(_) => info!("successfull handshake with peer {:?}", p),
+                Ok(_stream) => {
+                    info!("successfull handshake with peer {:?}", p);
+                    todo!();
+                }
                 Err(e) => warn!("handshake error: {}", e),
             }
         }
     }
+    Ok(())
 }
 
 /// Generate random 20 byte string, starting with -<2 byte client name><4 byte client version>-
