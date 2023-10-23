@@ -66,19 +66,24 @@ fn main() -> Result<()> {
                     info!("successfull handshake with peer {:?}", p);
                     send_message(&stream, Message::Unchoke)?;
                     send_message(&stream, Message::Interested)?;
-                    send_message(
-                        &stream,
-                        Message::Request {
-                            piece_index: 0,
-                            begin: 0,
-                            length: 1 << 14,
-                        },
-                    )?;
                     loop {
                         match read_message(&stream) {
+                            Ok(Message::Choke) => {
+                                continue;
+                            }
                             Ok(msg) => {
-                                if matches!(msg, Message::Piece { .. }) {
-                                    continue;
+                                if matches!(msg, Message::Unchoke) {
+                                    for i in 0..16 {
+                                        let block_size = 1 << 14;
+                                        send_message(
+                                            &stream,
+                                            Message::Request {
+                                                piece_index: 0,
+                                                begin: i * block_size,
+                                                length: block_size,
+                                            },
+                                        )?;
+                                    }
                                 }
                             }
                             Err(e) => {

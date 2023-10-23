@@ -1,6 +1,6 @@
 use anyhow::{ensure, Context, Error, Result};
 use core::fmt;
-use std::io::{BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::str::FromStr;
 use std::time::Duration;
@@ -147,7 +147,7 @@ pub fn handshake(
 ) -> Result<TcpStream> {
     let cn_timeout = Duration::new(1, 0);
     let hs_timeout = Duration::new(1, 0);
-    let rw_timeout = Duration::new(2, 0);
+    let rw_timeout = Duration::new(4, 0);
     debug!("connecting to peer {peer:?}");
     let mut stream = TcpStream::connect_timeout(
         &SocketAddr::new(IpAddr::from_str(&peer.ip)?, peer.port as u16),
@@ -166,10 +166,9 @@ pub fn handshake(
     stream.write_all(&handshake).context("write error")?;
     stream.flush()?;
 
-    let mut reader = BufReader::new(&stream);
     let mut read_packet = [0; 68];
     debug!("reading handshake");
-    reader.read_exact(&mut read_packet).context("read error")?;
+    stream.read_exact(&mut read_packet).context("read error")?;
     let msg: Vec<u8> = read_packet.to_vec();
     debug!("peer response: {}", hex(&msg));
     if let Message::Handshake {
@@ -190,21 +189,20 @@ pub fn handshake(
     }
 }
 
-pub fn read_message(stream: &TcpStream) -> Result<Message> {
-    let mut reader = BufReader::new(stream);
+pub fn read_message(mut stream: &TcpStream) -> Result<Message> {
     fn u32_from_slice(slice: &[u8]) -> Result<u32> {
         Ok(u32::from_be_bytes(slice.try_into()?))
     }
 
     let mut len_p = [0; 4];
-    reader.read_exact(&mut len_p)?;
+    stream.read_exact(&mut len_p)?;
     let len = u32::from_be_bytes(len_p);
     if len == 0 {
         return Ok(Message::KeepAlive);
     }
 
     let mut id_p = [0; 1];
-    reader.read_exact(&mut id_p).context("id_p read error")?;
+    stream.read_exact(&mut id_p).context("id_p read error")?;
     let id = u8::from_be_bytes(id_p);
 
     let msg = match id {
@@ -215,7 +213,7 @@ pub fn read_message(stream: &TcpStream) -> Result<Message> {
         _ if len == 1 => Err(Error::msg("unexpected message of size 1")),
         _ => {
             let mut payload_p = vec![0; len as usize - 1];
-            reader
+            stream
                 .read_exact(&mut payload_p)
                 .context("payload_p read error")?;
             match id {
