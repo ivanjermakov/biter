@@ -213,17 +213,17 @@ pub fn tracker_request(
             .join("&")
     );
     let url = format!("{announce}{params}");
-    println!("url: {url}");
+    debug!("url: {url}");
     let resp = Client::new()
         .get(url)
         .send()
         .map_err(|e| format!("request error: {}", e))?
         .bytes()
         .map_err(|e| format!("request body error: {}", e))?;
-    println!("raw response: {}", String::from_utf8_lossy(&resp));
+    debug!("raw response: {}", String::from_utf8_lossy(&resp));
     let resp_dict = parse_bencoded(resp.to_vec())
         .0
         .ok_or("Malformed response")?;
-    println!("response: {resp_dict:?}");
+    debug!("response: {resp_dict:?}");
     TrackerResponse::try_from(resp_dict)
 }

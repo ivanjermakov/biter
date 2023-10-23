@@ -84,7 +84,7 @@ pub fn parse_bencoded(bencoded: ByteString) -> (Option<BencodeValue>, ByteString
         'l' => parse_list(bencoded),
         'd' => parse_dict(bencoded),
         _ => {
-            eprintln!("unexpected character `{}`", *next as char);
+            error!("unexpected character `{}`", *next as char);
             (None, bencoded)
         }
     }

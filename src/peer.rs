@@ -57,7 +57,7 @@ pub fn handshake(
     peer_id: &ByteString,
 ) -> Result<TcpStream> {
     let timeout = Duration::new(4, 0);
-    println!("connecting to peer {peer:?}");
+    debug!("connecting to peer {peer:?}");
     let mut stream = TcpStream::connect_timeout(
         &SocketAddr::new(IpAddr::from_str(&peer.ip).unwrap(), peer.port as u16),
         timeout,
@@ -70,22 +70,22 @@ pub fn handshake(
     }
     .into();
 
-    println!("writing handshake {}", hex(&handshake.to_vec()));
+    debug!("writing handshake {}", hex(&handshake.to_vec()));
     stream.write_all(&handshake).context("write error")?;
     stream.flush()?;
 
     let mut reader = BufReader::new(&stream);
     let mut read_packet = [0; 68];
-    println!("reading handshake");
+    debug!("reading handshake");
     reader.read_exact(&mut read_packet).context("read error")?;
     let msg: Vec<u8> = read_packet.to_vec();
-    println!("peer response: {}", hex(&msg));
+    debug!("peer response: {}", hex(&msg));
     let hp = HandshakePacket::try_from(msg)
         .map_err(Error::msg)
         .context("handshake parse error")?;
     ensure!(hp.info_hash == *info_hash, "response `info_hash` differ");
     if hp.peer_id != peer.peer_id {
-        println!("peer id differ")
+        debug!("peer id differ")
     }
     Ok(stream)
 }
