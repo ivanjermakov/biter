@@ -8,28 +8,58 @@ use crate::hex::hex;
 use crate::tracker::TrackerPeer;
 use crate::types::ByteString;
 
-pub struct PeerHandshake {
-    info_hash: Vec<u8>,
-    peer_id: Vec<u8>,
+#[derive(Debug)]
+pub enum Message {
+    Handshake {
+        info_hash: Vec<u8>,
+        peer_id: Vec<u8>,
+    },
+    KeepAlive,
+    Choke,
+    Unchoke,
+    Interested,
+    NotInterested,
+    Have {
+        piece_index: u32,
+    },
+    Bitfield {
+        bitfield: Vec<u8>,
+    },
+    Request {
+        piece_index: u32,
+        begin: u32,
+        length: u32,
+    },
+    Piece {
+        piece_index: u32,
+        begin: u32,
+        block: Vec<u8>,
+    },
+    Cancel {
+        piece_index: u32,
+        begin: u32,
+        length: u32,
+    },
+    Port {
+        port: u8,
+    },
 }
 
-impl From<PeerHandshake> for Vec<u8> {
-    fn from(value: PeerHandshake) -> Self {
-        let pstr = "BitTorrent protocol";
-        let pstrlen = &[pstr.len() as u8];
-        let reserved = &[0u8; 8];
-        [
-            pstrlen,
-            pstr.as_bytes(),
-            reserved,
-            &value.info_hash,
-            &value.peer_id,
-        ]
-        .concat()
+impl From<Message> for Vec<u8> {
+    fn from(value: Message) -> Self {
+        match value {
+            Message::Handshake { info_hash, peer_id } => {
+                let pstr = "BitTorrent protocol";
+                let pstrlen = &[pstr.len() as u8];
+                let reserved = &[0u8; 8];
+                [pstrlen, pstr.as_bytes(), reserved, &info_hash, &peer_id].concat()
+            }
+            _ => todo!(),
+        }
     }
 }
 
-impl TryFrom<Vec<u8>> for PeerHandshake {
+impl TryFrom<Vec<u8>> for Message {
     type Error = String;
 
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
@@ -44,7 +74,7 @@ impl TryFrom<Vec<u8>> for PeerHandshake {
         if pstr != "BitTorrent protocol".as_bytes() {
             return Err(format!("invalid pstr: {}", hex(pstr)));
         }
-        Ok(PeerHandshake {
+        Ok(Message::Handshake {
             info_hash: value.as_slice()[28..48].to_vec(),
             peer_id: value.as_slice()[48..68].to_vec(),
         })
@@ -64,7 +94,7 @@ pub fn handshake(
     )?;
     stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(timeout))?;
-    let handshake: Vec<u8> = PeerHandshake {
+    let handshake: Vec<u8> = Message::Handshake {
         info_hash: info_hash.clone(),
         peer_id: peer_id.clone(),
     }
@@ -80,12 +110,78 @@ pub fn handshake(
     reader.read_exact(&mut read_packet).context("read error")?;
     let msg: Vec<u8> = read_packet.to_vec();
     debug!("peer response: {}", hex(&msg));
-    let hp = PeerHandshake::try_from(msg)
+    if let Message::Handshake {
+        info_hash: h_info_hash,
+        peer_id: h_peer_id,
+    } = Message::try_from(msg)
         .map_err(Error::msg)
-        .context("handshake parse error")?;
-    ensure!(hp.info_hash == *info_hash, "response `info_hash` differ");
-    if hp.peer_id != peer.peer_id {
-        debug!("peer id differ")
+        .context("handshake parse error")?
+    {
+        ensure!(h_info_hash == *info_hash, "response `info_hash` differ");
+        if h_peer_id != peer.peer_id {
+            debug!("peer id differ")
+        }
+        Ok(stream)
+    } else {
+        Err(Error::msg("unexpected message"))
     }
-    Ok(stream)
+}
+
+pub fn read_message(mut stream: &TcpStream) -> Result<Message> {
+    fn u32_from_slice(slice: &[u8]) -> Result<u32> {
+        Ok(u32::from_be_bytes(slice.try_into()?))
+    }
+
+    let mut len_p = [0; 4];
+    stream.read_exact(&mut len_p)?;
+    let len = u32::from_be_bytes(len_p);
+    if len == 0 {
+        return Ok(Message::KeepAlive);
+    }
+
+    let mut id_p = [0; 1];
+    stream.read_exact(&mut id_p).context("id_p read error")?;
+    let id = u8::from_be_bytes(id_p);
+
+    match id {
+        0 if len == 1 => Ok(Message::Choke),
+        1 if len == 1 => Ok(Message::Unchoke),
+        2 if len == 1 => Ok(Message::Interested),
+        3 if len == 1 => Ok(Message::NotInterested),
+        _ if len == 1 => Err(Error::msg("unexpected message of size 1")),
+        _ => {
+            let mut payload_p = vec![0; len as usize - 1];
+            stream
+                .read_exact(&mut payload_p)
+                .context("payload_p read error")?;
+            match id {
+                4 if len == 5 => Ok(Message::Have {
+                    piece_index: u32_from_slice(&payload_p[0..4])?,
+                }),
+                5 => Ok(Message::Bitfield {
+                    bitfield: payload_p,
+                }),
+                6 if len == 13 => Ok(Message::Request {
+                    piece_index: u32_from_slice(&payload_p[0..4])?,
+                    begin: u32_from_slice(&payload_p[4..8])?,
+                    length: u32_from_slice(&payload_p[8..12])?,
+                }),
+                7 if len > 9 => Ok(Message::Piece {
+                    piece_index: u32_from_slice(&payload_p[0..4])?,
+                    begin: u32_from_slice(&payload_p[4..8])?,
+                    block: payload_p[8..].to_vec(),
+                }),
+                8 if len == 13 => Ok(Message::Cancel {
+                    piece_index: u32_from_slice(&payload_p[0..4])?,
+                    begin: u32_from_slice(&payload_p[4..8])?,
+                    length: u32_from_slice(&payload_p[8..12])?,
+                }),
+                9 if len == 3 => Ok(Message::Port { port: payload_p[0] }),
+                _ => Err(Error::msg(format!(
+                    "unexpected message: {}",
+                    hex(&[len_p.as_ref(), &id_p, payload_p.as_slice()].concat())
+                ))),
+            }
+        }
+    }
 }

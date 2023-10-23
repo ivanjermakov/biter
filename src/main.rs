@@ -11,6 +11,7 @@ use types::ByteString;
 
 use crate::{
     metainfo::Metainfo,
+    peer::read_message,
     tracker::{tracker_request, TrackerRequest, TrackerResponse},
 };
 
@@ -61,9 +62,19 @@ fn main() -> Result<()> {
     if let TrackerResponse::Success(resp) = tracker_response {
         for p in resp.peers {
             match handshake(&p, &info_hash, &peer_id) {
-                Ok(_stream) => {
+                Ok(stream) => {
                     info!("successfull handshake with peer {:?}", p);
-                    todo!();
+                    loop {
+                        match read_message(&stream) {
+                            Ok(msg) => {
+                                debug!("message from peer {:?}: {:?}", p, msg);
+                            }
+                            Err(e) => {
+                                warn!("{}", e);
+                                break;
+                            }
+                        };
+                    }
                 }
                 Err(e) => warn!("handshake error: {}", e),
             }
