@@ -145,9 +145,9 @@ pub fn handshake(
     info_hash: &ByteString,
     peer_id: &ByteString,
 ) -> Result<TcpStream> {
-    let cn_timeout = Duration::new(4, 0);
-    let hs_timeout = Duration::new(4, 0);
-    let rw_timeout = Duration::new(60, 0);
+    let cn_timeout = Duration::new(1, 0);
+    let hs_timeout = Duration::new(1, 0);
+    let rw_timeout = Duration::new(2, 0);
     debug!("connecting to peer {peer:?}");
     let mut stream = TcpStream::connect_timeout(
         &SocketAddr::new(IpAddr::from_str(&peer.ip)?, peer.port as u16),
@@ -190,23 +190,24 @@ pub fn handshake(
     }
 }
 
-pub fn read_message(mut stream: &TcpStream) -> Result<Message> {
+pub fn read_message(stream: &TcpStream) -> Result<Message> {
+    let mut reader = BufReader::new(stream);
     fn u32_from_slice(slice: &[u8]) -> Result<u32> {
         Ok(u32::from_be_bytes(slice.try_into()?))
     }
 
     let mut len_p = [0; 4];
-    stream.read_exact(&mut len_p)?;
+    reader.read_exact(&mut len_p)?;
     let len = u32::from_be_bytes(len_p);
     if len == 0 {
         return Ok(Message::KeepAlive);
     }
 
     let mut id_p = [0; 1];
-    stream.read_exact(&mut id_p).context("id_p read error")?;
+    reader.read_exact(&mut id_p).context("id_p read error")?;
     let id = u8::from_be_bytes(id_p);
 
-    match id {
+    let msg = match id {
         0 if len == 1 => Ok(Message::Choke),
         1 if len == 1 => Ok(Message::Unchoke),
         2 if len == 1 => Ok(Message::Interested),
@@ -214,7 +215,7 @@ pub fn read_message(mut stream: &TcpStream) -> Result<Message> {
         _ if len == 1 => Err(Error::msg("unexpected message of size 1")),
         _ => {
             let mut payload_p = vec![0; len as usize - 1];
-            stream
+            reader
                 .read_exact(&mut payload_p)
                 .context("payload_p read error")?;
             match id {
@@ -246,7 +247,9 @@ pub fn read_message(mut stream: &TcpStream) -> Result<Message> {
                 ))),
             }
         }
-    }
+    }?;
+    debug!("<<< read message: {:?}", msg);
+    Ok(msg)
 }
 
 pub fn send_message(mut stream: &TcpStream, message: Message) -> Result<()> {
@@ -254,5 +257,6 @@ pub fn send_message(mut stream: &TcpStream, message: Message) -> Result<()> {
     let msg_p: Vec<u8> = message.into();
     trace!("raw message: {}", hex(&msg_p));
     stream.write_all(&msg_p)?;
+    stream.flush()?;
     Ok(())
 }
