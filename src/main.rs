@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate log;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, Error};
 use futures::future::join_all;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::{collections::BTreeMap, fs, path::PathBuf, sync::Arc};
@@ -32,7 +32,7 @@ async fn main() -> Result<()> {
         env_logger::Env::default().filter_or(env_logger::DEFAULT_FILTER_ENV, "info"),
     );
 
-    let path = PathBuf::from("data/knoppix.torrent");
+    let path = PathBuf::from("data/academic_test.torrent");
     let bencoded = fs::read(path).context("no metadata file")?;
     let metainfo_dict = match parse_bencoded(bencoded) {
         (Some(metadata), left) if left.is_empty() => metadata,
@@ -76,6 +76,7 @@ async fn main() -> Result<()> {
         let handles = resp
             .peers
             .into_iter()
+            .take(30)
             .map(|p| {
                 let state = state.clone();
                 handle_peer(p, state)
@@ -83,6 +84,18 @@ async fn main() -> Result<()> {
             .collect::<Vec<_>>();
         join_all(handles).await;
     }
+
+    let state = state.lock().await;
+    if state.pieces.len() != state.metainfo.info.pieces.len() {
+        return Err(Error::msg("pieces length mismatch"))
+    }
+
+    if state.pieces.values().any(|p| !p.completed) {
+        return Err(Error::msg("incomplete pieces"))
+    }
+
+    // TODO: split pieces into files and save to disk
+
     Ok(())
 }
 
