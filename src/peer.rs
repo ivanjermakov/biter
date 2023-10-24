@@ -1,17 +1,23 @@
 use anyhow::{ensure, Context, Error, Result};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::net::TcpStream;
-use tokio::select;
-use tokio::sync::Mutex;
-use tokio::time::{sleep, timeout};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
+        TcpStream,
+    },
+    select,
+    sync::Mutex,
+    time::{sleep, timeout},
+};
 
-use crate::hex::hex;
-use crate::sha1;
-use crate::state::{Block, Peer, PeerInfo, State, BLOCK_SIZE};
-use crate::types::ByteString;
+use crate::{
+    hex::hex,
+    sha1,
+    state::{Block, Peer, PeerInfo, State, BLOCK_SIZE},
+    types::ByteString,
+};
 
 #[derive(Debug)]
 pub enum Message {
