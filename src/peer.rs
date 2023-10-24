@@ -6,7 +6,7 @@ use tokio::join;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 
 use crate::hex::hex;
 use crate::sha1;
@@ -321,7 +321,7 @@ pub async fn write_loop(
             };
             send_message(&mut stream, request_msg).await?;
         }
-        // sleep(Duration::new(0, 100e6 as u32)).await;
+        sleep(Duration::new(0, 100e6 as u32)).await;
     }
 }
 
