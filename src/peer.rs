@@ -2,15 +2,15 @@ use anyhow::{ensure, Context, Error, Result};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::join;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
+use tokio::select;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, timeout};
 
 use crate::hex::hex;
 use crate::sha1;
-use crate::state::{Block, PeerInfo, State, BLOCK_SIZE};
+use crate::state::{Block, Peer, PeerInfo, State, BLOCK_SIZE};
 use crate::types::ByteString;
 
 #[derive(Debug)]
@@ -258,7 +258,10 @@ pub async fn send_message(stream: &mut OwnedWriteHalf, message: Message) -> Resu
 
 pub async fn handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()> {
     let (info_hash, peer_id) = {
-        let state = state.lock().await;
+        let mut state = state.lock().await;
+        state
+            .peers
+            .insert(peer.peer_id.clone(), Peer::new(peer.clone()));
         (state.info_hash.clone(), state.peer_id.clone())
     };
     let stream = handshake(&peer, &info_hash, &peer_id)
@@ -266,23 +269,25 @@ pub async fn handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()>
         .context("handshake error")?;
     info!("successfull handshake with peer {:?}", peer);
 
+    if let Some(p) = state.lock().await.peers.get_mut(&peer.peer_id) {
+        p.connected = true;
+    }
+
     let (r_stream, mut w_stream) = stream.into_split();
 
     send_message(&mut w_stream, Message::Unchoke).await?;
     send_message(&mut w_stream, Message::Interested).await?;
 
-    let (w_res, r_res) = join!(
-        {
+    select!(
+        r = {
             let state = state.clone();
             write_loop(w_stream, peer.clone(), state)
-        },
-        {
+        } => r.context("write error"),
+        r = {
             let state = state.clone();
             read_loop(r_stream, peer.clone(), state)
-        }
-    );
-    w_res.context("write error")?;
-    r_res.context("read error")?;
+        } => r.context("read error")
+    )?;
 
     Ok(())
 }
@@ -304,7 +309,10 @@ pub async fn write_loop(
         }
         let piece = match { state.lock().await.next_piece() } {
             Some(p) => p,
-            None => return Ok(()),
+            None => {
+                debug!("no more pieces to request, disconnecting");
+                return Ok(());
+            }
         };
         debug!("next request piece: {:?}", piece);
         let total_blocks = piece.total_blocks();

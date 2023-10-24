@@ -67,11 +67,26 @@ impl fmt::Debug for Block {
 #[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
 pub struct Peer {
     pub info: PeerInfo,
+    pub connected: bool,
     pub am_choked: bool,
     pub am_interested: bool,
     pub choked: bool,
     pub interested: bool,
     pub bitfield: Option<Vec<u8>>,
+}
+
+impl Peer {
+    pub fn new(info: PeerInfo) -> Peer {
+        Peer {
+            info,
+            connected: false,
+            am_choked: true,
+            am_interested: false,
+            choked: true,
+            interested: false,
+            bitfield: None,
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, PartialOrd, Hash)]

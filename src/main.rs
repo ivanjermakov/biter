@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate log;
 
-use anyhow::{Context, Result, Error};
+use anyhow::{ensure, Context, Result};
 use futures::future::join_all;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::{collections::BTreeMap, fs, path::PathBuf, sync::Arc};
@@ -86,13 +86,14 @@ async fn main() -> Result<()> {
     }
 
     let state = state.lock().await;
-    if state.pieces.len() != state.metainfo.info.pieces.len() {
-        return Err(Error::msg("pieces length mismatch"))
-    }
-
-    if state.pieces.values().any(|p| !p.completed) {
-        return Err(Error::msg("incomplete pieces"))
-    }
+    ensure!(
+        state.pieces.len() == state.metainfo.info.pieces.len(),
+        "pieces length mismatch"
+    );
+    ensure!(
+        state.pieces.values().all(|p| p.completed),
+        "incomplete pieces"
+    );
 
     // TODO: split pieces into files and save to disk
 
