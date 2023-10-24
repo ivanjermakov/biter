@@ -1,17 +1,17 @@
 #[macro_use]
 extern crate log;
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{anyhow, ensure, Context, Error, Result};
 use futures::future::join_all;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::{collections::BTreeMap, fs, path::PathBuf, sync::Arc};
-use tokio::sync::Mutex;
+use tokio::{spawn, sync::Mutex};
 
 use bencode::parse_bencoded;
 use types::ByteString;
 
 use crate::{
-    metainfo::Metainfo,
+    metainfo::{FileInfo, Metainfo, PathInfo},
     peer::handle_peer,
     state::{init_pieces, State},
     tracker::{tracker_request, TrackerRequest, TrackerResponse},
@@ -32,7 +32,7 @@ async fn main() -> Result<()> {
         env_logger::Env::default().filter_or(env_logger::DEFAULT_FILTER_ENV, "info"),
     );
 
-    let path = PathBuf::from("data/academic_test.torrent");
+    let path = PathBuf::from("data/knoppix.torrent");
     let bencoded = fs::read(path).context("no metadata file")?;
     let metainfo_dict = match parse_bencoded(bencoded) {
         (Some(metadata), left) if left.is_empty() => metadata,
@@ -76,16 +76,20 @@ async fn main() -> Result<()> {
         let handles = resp
             .peers
             .into_iter()
-            .take(30)
             .map(|p| {
-                let state = state.clone();
-                handle_peer(p, state)
+                spawn({
+                    let state = state.clone();
+                    handle_peer(p, state)
+                })
             })
             .collect::<Vec<_>>();
         join_all(handles).await;
     }
 
-    let state = state.lock().await;
+    debug!("verifying downloaded pieces");
+    let state = Arc::try_unwrap(state)
+        .map_err(|_| Error::msg("dangling state reference"))?
+        .into_inner();
     ensure!(
         state.pieces.len() == state.metainfo.info.pieces.len(),
         "pieces length mismatch"
@@ -95,9 +99,51 @@ async fn main() -> Result<()> {
         "incomplete pieces"
     );
 
-    // TODO: split pieces into files and save to disk
+    info!("partitioning pieces into files");
+    let mut data: Vec<u8> = state
+        .pieces
+        .into_values()
+        .flat_map(|p| p.blocks.into_values().flat_map(|b| b.0))
+        .collect();
 
+    let files = match metainfo.info.file_info {
+        FileInfo::Single { length, md5_sum } => vec![PathInfo {
+            length,
+            path: PathBuf::from(&metainfo.info.name),
+            md5_sum,
+        }],
+        FileInfo::Multi { files } => files,
+    };
+
+    info!("writing files");
+    let mut write_handles = vec![];
+    for file in files {
+        let file_data = data.drain(0..file.length as usize).collect();
+        let path = PathBuf::from("download")
+            .join(&metainfo.info.name)
+            .join(file.path.clone());
+        write_handles.push(spawn(write_file(path, file_data)))
+    }
+
+    let write_res = join_all(write_handles).await;
+    if write_res.into_iter().filter(|r| r.is_err()).count() != 0 {
+        return Err(Error::msg("file write errors"));
+    }
+
+    info!("torrent downloaded: {}", metainfo.info.name);
     Ok(())
+}
+
+async fn write_file(path: PathBuf, data: Vec<u8>) -> Result<()> {
+    debug!("writing file ({} bytes): {:?}", data.len(), path);
+    tokio::fs::create_dir_all(&path.parent().context("no parent")?).await?;
+    let res = tokio::fs::write(&path, &data).await;
+    if let Err(e) = res {
+        error!("file write error: {e}");
+        return Err(anyhow!(e));
+    }
+    info!("file written ({} bytes): {:?}", data.len(), path);
+    Ok::<(), Error>(())
 }
 
 /// Generate random 20 byte string, starting with -<2 byte client name><4 byte client version>-

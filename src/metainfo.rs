@@ -41,7 +41,7 @@ pub enum FileInfo {
         md5_sum: Option<String>,
     },
     Multi {
-        files: Vec<FilesInfo>,
+        files: Vec<PathInfo>,
     },
 }
 
@@ -55,7 +55,7 @@ impl FileInfo {
 }
 
 #[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
-pub struct FilesInfo {
+pub struct PathInfo {
     pub length: i64,
     pub path: PathBuf,
     pub md5_sum: Option<String>,
@@ -131,7 +131,7 @@ impl TryFrom<BencodeValue> for Metainfo {
     }
 }
 
-fn parse_files_info(value: &BencodeValue) -> Result<Vec<FilesInfo>, String> {
+fn parse_files_info(value: &BencodeValue) -> Result<Vec<PathInfo>, String> {
     match value {
         BencodeValue::List(l) => l
             .iter()
@@ -149,7 +149,7 @@ fn parse_files_info(value: &BencodeValue) -> Result<Vec<FilesInfo>, String> {
                             .collect::<Result<PathBuf, String>>()?,
                         _ => return Err("'path' is not a list".into()),
                     };
-                    Ok(FilesInfo {
+                    Ok(PathInfo {
                         length: match d.get("length") {
                             Some(BencodeValue::Int(v)) => *v,
                             _ => return Err("'length' missing".into()),
