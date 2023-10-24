@@ -1,21 +1,14 @@
 use anyhow::{ensure, Context, Error, Result};
-use core::fmt;
-use std::io::{Read, Write};
-use std::net::{IpAddr, SocketAddr, TcpStream};
-use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::sync::Mutex;
+use tokio::time::timeout;
 
 use crate::hex::hex;
-use crate::tracker::TrackerPeer;
+use crate::state::{Block, PeerInfo, State};
 use crate::types::ByteString;
-
-pub struct Block(Vec<u8>);
-
-impl fmt::Debug for Block {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("<block>")
-    }
-}
 
 #[derive(Debug)]
 pub enum Message {
@@ -140,22 +133,17 @@ impl TryFrom<Vec<u8>> for Message {
     }
 }
 
-pub fn handshake(
-    peer: &TrackerPeer,
+pub async fn handshake(
+    peer: &PeerInfo,
     info_hash: &ByteString,
     peer_id: &ByteString,
 ) -> Result<TcpStream> {
-    let cn_timeout = Duration::new(1, 0);
-    let hs_timeout = Duration::new(1, 0);
-    let rw_timeout = Duration::new(4, 0);
     debug!("connecting to peer {peer:?}");
-    let mut stream = TcpStream::connect_timeout(
-        &SocketAddr::new(IpAddr::from_str(&peer.ip)?, peer.port as u16),
-        cn_timeout,
-    )?;
-    // special short timeout for the first read
-    stream.set_read_timeout(Some(hs_timeout))?;
-    stream.set_write_timeout(Some(rw_timeout))?;
+    let mut stream = timeout(
+        Duration::new(4, 0),
+        TcpStream::connect(format!("{}:{}", peer.ip, peer.port)),
+    )
+    .await??;
     let handshake: Vec<u8> = Message::Handshake {
         info_hash: info_hash.clone(),
         peer_id: peer_id.clone(),
@@ -163,12 +151,15 @@ pub fn handshake(
     .into();
 
     debug!("writing handshake {}", hex(&handshake.to_vec()));
-    stream.write_all(&handshake).context("write error")?;
-    stream.flush()?;
+    stream.write_all(&handshake).await.context("write error")?;
+    stream.flush().await?;
 
     let mut read_packet = [0; 68];
     debug!("reading handshake");
-    stream.read_exact(&mut read_packet).context("read error")?;
+    stream
+        .read_exact(&mut read_packet)
+        .await
+        .context("read error")?;
     let msg: Vec<u8> = read_packet.to_vec();
     debug!("peer response: {}", hex(&msg));
     if let Message::Handshake {
@@ -182,27 +173,29 @@ pub fn handshake(
         if h_peer_id != peer.peer_id {
             debug!("peer id differ")
         }
-        stream.set_read_timeout(Some(rw_timeout))?;
         Ok(stream)
     } else {
         Err(Error::msg("unexpected message"))
     }
 }
 
-pub fn read_message(mut stream: &TcpStream) -> Result<Message> {
+pub async fn read_message(stream: &mut TcpStream) -> Result<Message> {
     fn u32_from_slice(slice: &[u8]) -> Result<u32> {
         Ok(u32::from_be_bytes(slice.try_into()?))
     }
 
     let mut len_p = [0; 4];
-    stream.read_exact(&mut len_p)?;
+    stream.read_exact(&mut len_p).await?;
     let len = u32::from_be_bytes(len_p);
     if len == 0 {
         return Ok(Message::KeepAlive);
     }
 
     let mut id_p = [0; 1];
-    stream.read_exact(&mut id_p).context("id_p read error")?;
+    stream
+        .read_exact(&mut id_p)
+        .await
+        .context("id_p read error")?;
     let id = u8::from_be_bytes(id_p);
 
     let msg = match id {
@@ -215,6 +208,7 @@ pub fn read_message(mut stream: &TcpStream) -> Result<Message> {
             let mut payload_p = vec![0; len as usize - 1];
             stream
                 .read_exact(&mut payload_p)
+                .await
                 .context("payload_p read error")?;
             match id {
                 4 if len == 5 => Ok(Message::Have {
@@ -250,11 +244,51 @@ pub fn read_message(mut stream: &TcpStream) -> Result<Message> {
     Ok(msg)
 }
 
-pub fn send_message(mut stream: &TcpStream, message: Message) -> Result<()> {
+pub async fn send_message(stream: &mut TcpStream, message: Message) -> Result<()> {
     debug!(">>> sending message: {:?}", message);
     let msg_p: Vec<u8> = message.into();
     trace!("raw message: {}", hex(&msg_p));
-    stream.write_all(&msg_p)?;
-    stream.flush()?;
+    stream.write_all(&msg_p).await?;
+    stream.flush().await?;
+    Ok(())
+}
+
+pub async fn handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()> {
+    let (info_hash, peer_id) = {
+        let state = state.lock().await;
+        (state.info_hash.clone(), state.peer_id.clone())
+    };
+    match handshake(&peer, &info_hash, &peer_id).await {
+        Ok(mut stream) => {
+            info!("successfull handshake with peer {:?}", peer);
+            send_message(&mut stream, Message::Unchoke).await?;
+            send_message(&mut stream, Message::Interested).await?;
+            loop {
+                match read_message(&mut stream).await {
+                    Ok(Message::Choke) => {
+                        continue;
+                    }
+                    Ok(msg) => {
+                        if matches!(msg, Message::Unchoke) {
+                            for i in 0..16 {
+                                let block_size = 1 << 14;
+                                let request_msg = Message::Request {
+                                    piece_index: 0,
+                                    begin: i * block_size,
+                                    length: block_size,
+                                };
+                                send_message(&mut stream, request_msg).await?;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("{}", e);
+                        break;
+                    }
+                };
+            }
+        }
+        Err(e) => warn!("handshake error: {}", e),
+    };
     Ok(())
 }

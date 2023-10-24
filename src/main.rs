@@ -2,16 +2,18 @@
 extern crate log;
 
 use anyhow::{Context, Result};
-use peer::handshake;
+use futures::future::join_all;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
-use std::{fs, path::PathBuf};
+use std::{collections::BTreeMap, fs, path::PathBuf, sync::Arc};
+use tokio::sync::Mutex;
 
 use bencode::parse_bencoded;
 use types::ByteString;
 
 use crate::{
     metainfo::Metainfo,
-    peer::{read_message, send_message, Message},
+    peer::handle_peer,
+    state::{init_pieces, State},
     tracker::{tracker_request, TrackerRequest, TrackerResponse},
 };
 
@@ -20,10 +22,12 @@ mod hex;
 mod metainfo;
 mod peer;
 mod sha1;
+mod state;
 mod tracker;
 mod types;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     env_logger::init_from_env(
         env_logger::Env::default().filter_or(env_logger::DEFAULT_FILTER_ENV, "info"),
     );
@@ -48,7 +52,7 @@ fn main() -> Result<()> {
     let peer_id = generate_peer_id();
     info!("peer id {}", String::from_utf8_lossy(peer_id.as_slice()));
     let tracker_response = tracker_request(
-        metainfo.announce,
+        metainfo.announce.clone(),
         TrackerRequest::new(
             info_hash.clone(),
             peer_id.clone(),
@@ -56,46 +60,29 @@ fn main() -> Result<()> {
             None,
         ),
     )
+    .await
     .context("request failed")?;
     info!("tracker response: {tracker_response:?}");
 
+    let state = Arc::new(Mutex::new(State {
+        metainfo: metainfo.clone(),
+        info_hash,
+        peer_id,
+        pieces: init_pieces(&metainfo.info),
+        peers: BTreeMap::new(),
+    }));
+
     if let TrackerResponse::Success(resp) = tracker_response {
-        for p in resp.peers {
-            match handshake(&p, &info_hash, &peer_id) {
-                Ok(stream) => {
-                    info!("successfull handshake with peer {:?}", p);
-                    send_message(&stream, Message::Unchoke)?;
-                    send_message(&stream, Message::Interested)?;
-                    loop {
-                        match read_message(&stream) {
-                            Ok(Message::Choke) => {
-                                continue;
-                            }
-                            Ok(msg) => {
-                                if matches!(msg, Message::Unchoke) {
-                                    for i in 0..16 {
-                                        let block_size = 1 << 14;
-                                        send_message(
-                                            &stream,
-                                            Message::Request {
-                                                piece_index: 0,
-                                                begin: i * block_size,
-                                                length: block_size,
-                                            },
-                                        )?;
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                warn!("{}", e);
-                                break;
-                            }
-                        };
-                    }
-                }
-                Err(e) => warn!("handshake error: {}", e),
-            }
-        }
+        let handles = resp
+            .peers
+            .into_iter()
+            .take(4)
+            .map(|p| {
+                let state = state.clone();
+                handle_peer(p, state)
+            })
+            .collect::<Vec<_>>();
+        join_all(handles).await;
     }
     Ok(())
 }

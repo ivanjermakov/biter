@@ -1,11 +1,12 @@
 use core::fmt;
 
 use anyhow::{Context, Error, Result};
-use reqwest::blocking::Client;
+use reqwest::Client;
 use urlencoding::encode_binary;
 
 use crate::{
     bencode::{parse_bencoded, BencodeValue},
+    state::PeerInfo,
     types::ByteString,
 };
 
@@ -114,7 +115,7 @@ impl TryFrom<BencodeValue> for TrackerResponse {
             Some(BencodeValue::List(ps)) => ps
                 .iter()
                 .map(|p| match p {
-                    BencodeValue::Dict(p_dict) => Ok(TrackerPeer {
+                    BencodeValue::Dict(p_dict) => Ok(PeerInfo {
                         peer_id: match p_dict.get("peer id") {
                             Some(BencodeValue::String(v)) => v.clone(),
                             _ => return Err("'peer id' missing".into()),
@@ -169,7 +170,7 @@ impl TryFrom<BencodeValue> for TrackerResponse {
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct TrackerResponseSuccess {
-    pub peers: Vec<TrackerPeer>,
+    pub peers: Vec<PeerInfo>,
     pub interval: i64,
     pub warning_message: Option<String>,
     pub min_interval: Option<i64>,
@@ -178,29 +179,7 @@ pub struct TrackerResponseSuccess {
     pub incomplete: Option<i64>,
 }
 
-pub struct TrackerPeer {
-    pub peer_id: ByteString,
-    pub ip: String,
-    pub port: i64,
-}
-
-impl fmt::Debug for TrackerPeer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        f.debug_struct("TrackerPeer")
-            .field(
-                "peer_id",
-                &match String::from_utf8(self.peer_id.clone()) {
-                    Ok(str) => str,
-                    _ => "<non-utf>".into(),
-                },
-            )
-            .field("ip", &self.ip)
-            .field("port", &self.port)
-            .finish()
-    }
-}
-
-pub fn tracker_request(announce: String, request: TrackerRequest) -> Result<TrackerResponse> {
+pub async fn tracker_request(announce: String, request: TrackerRequest) -> Result<TrackerResponse> {
     let params = format!(
         "?{}",
         request
@@ -215,8 +194,10 @@ pub fn tracker_request(announce: String, request: TrackerRequest) -> Result<Trac
     let resp = Client::new()
         .get(url)
         .send()
+        .await
         .context("request error")?
         .bytes()
+        .await
         .context("request body error")?;
     debug!("raw response: {}", String::from_utf8_lossy(&resp));
     let resp_dict = parse_bencoded(resp.to_vec())

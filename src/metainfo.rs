@@ -1,9 +1,9 @@
 use core::fmt;
 use std::path::PathBuf;
 
-use crate::{bencode::BencodeValue, hex::hex, types::ByteString};
+use crate::{bencode::BencodeValue, state::PieceHash};
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
 pub struct Metainfo {
     pub info: Info,
     pub announce: String,
@@ -14,16 +14,7 @@ pub struct Metainfo {
     pub encoding: Option<String>,
 }
 
-#[derive(PartialEq, Eq, Hash)]
-pub struct PieceHash(ByteString);
-
-impl fmt::Debug for PieceHash {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "#{}", hex(&self.0))
-    }
-}
-
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, PartialOrd, Hash)]
 pub struct Info {
     pub piece_length: i64,
     pub pieces: Vec<PieceHash>,
@@ -43,7 +34,7 @@ impl fmt::Debug for Info {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
 pub enum FileInfo {
     Single {
         length: i64,
@@ -54,7 +45,16 @@ pub enum FileInfo {
     },
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+impl FileInfo {
+    pub fn total_length(&self) -> i64 {
+        match self {
+            FileInfo::Single { length, .. } => *length,
+            FileInfo::Multi { files } => files.iter().map(|f| f.length).sum(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
 pub struct FilesInfo {
     pub length: i64,
     pub path: PathBuf,
