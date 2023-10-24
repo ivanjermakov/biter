@@ -202,7 +202,7 @@ pub async fn tracker_request(announce: String, request: TrackerRequest) -> Resul
     debug!("raw response: {}", String::from_utf8_lossy(&resp));
     let resp_dict = parse_bencoded(resp.to_vec())
         .0
-        .context("Malformed response")?;
+        .context("malformed response")?;
     debug!("response: {resp_dict:?}");
     TrackerResponse::try_from(resp_dict).map_err(Error::msg)
 }

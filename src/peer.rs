@@ -7,7 +7,8 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 use crate::hex::hex;
-use crate::state::{Block, PeerInfo, State};
+use crate::sha1;
+use crate::state::{Block, PeerInfo, State, BLOCK_SIZE};
 use crate::types::ByteString;
 
 #[derive(Debug)]
@@ -263,29 +264,85 @@ pub async fn handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()>
             info!("successfull handshake with peer {:?}", peer);
             send_message(&mut stream, Message::Unchoke).await?;
             send_message(&mut stream, Message::Interested).await?;
+
             loop {
-                match read_message(&mut stream).await {
-                    Ok(Message::Choke) => {
-                        continue;
-                    }
-                    Ok(msg) => {
-                        if matches!(msg, Message::Unchoke) {
-                            for i in 0..16 {
-                                let block_size = 1 << 14;
+                let mut piece = match { state.lock().await.next_piece() } {
+                    Some(p) => p,
+                    None => return Ok(()),
+                };
+                info!("next piece to request: {:?}", piece);
+                let total_blocks = (piece.length as f64 / BLOCK_SIZE as f64).ceil() as u32;
+
+                loop {
+                    match read_message(&mut stream).await {
+                        Ok(Message::Choke) => continue,
+                        Ok(Message::Unchoke) => {
+                            for i in 0..total_blocks {
                                 let request_msg = Message::Request {
-                                    piece_index: 0,
-                                    begin: i * block_size,
-                                    length: block_size,
+                                    piece_index: piece.index,
+                                    begin: i * BLOCK_SIZE,
+                                    length: if i == total_blocks - 1
+                                        && piece.length % BLOCK_SIZE != 0
+                                    {
+                                        piece.length % BLOCK_SIZE
+                                    } else {
+                                        BLOCK_SIZE
+                                    },
                                 };
                                 send_message(&mut stream, request_msg).await?;
                             }
                         }
-                    }
-                    Err(e) => {
-                        warn!("{}", e);
-                        break;
-                    }
-                };
+                        Ok(Message::Piece {
+                            piece_index,
+                            begin,
+                            block,
+                        }) => {
+                            if piece_index != piece.index as u32 {
+                                debug!("block for another piece, ignoring");
+                                continue;
+                            }
+                            if begin % BLOCK_SIZE != 0 {
+                                warn!("block begin is not a multiple of block size");
+                                continue;
+                            }
+                            let block_index = begin / BLOCK_SIZE;
+                            if block_index != total_blocks - 1
+                                && block.0.len() != BLOCK_SIZE as usize
+                            {
+                                warn!("block of unexpected size: {}", block.0.len());
+                                continue;
+                            }
+                            piece.blocks.insert(block_index, block);
+                            debug!("got block {}/{}", piece.blocks.len(), total_blocks);
+                            if piece.blocks.len() as u32 == total_blocks {
+                                let piece_data: Vec<u8> = piece
+                                    .blocks
+                                    .values()
+                                    .flat_map(|b| b.0.as_slice())
+                                    .copied()
+                                    .collect();
+                                let piece_hash = sha1::encode(piece_data);
+                                if piece_hash != piece.hash.0 {
+                                    warn!("piece hash does not match: {:?}", piece);
+                                    trace!("{}", hex(&piece_hash));
+                                    trace!("{}", hex(&piece.hash.0));
+                                    continue;
+                                }
+                                info!("piece completed: {:?}", piece);
+                                piece.completed = true;
+                                state.lock().await.pieces.insert(piece.index, piece.clone());
+                                break;
+                            }
+                        }
+                        Ok(msg) => {
+                            debug!("no handler for message, skipping: {:?}", msg);
+                        }
+                        Err(e) => {
+                            warn!("{}", e);
+                            break;
+                        }
+                    };
+                }
             }
         }
         Err(e) => warn!("handshake error: {}", e),

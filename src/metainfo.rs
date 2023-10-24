@@ -16,7 +16,7 @@ pub struct Metainfo {
 
 #[derive(Clone, PartialEq, PartialOrd, Hash)]
 pub struct Info {
-    pub piece_length: i64,
+    pub piece_length: u32,
     pub pieces: Vec<PieceHash>,
     pub name: String,
     pub file_info: FileInfo,
@@ -103,7 +103,7 @@ impl TryFrom<BencodeValue> for Metainfo {
         let metainfo = Metainfo {
             info: Info {
                 piece_length: match info_dict.get("piece length") {
-                    Some(BencodeValue::Int(v)) => *v,
+                    Some(BencodeValue::Int(v)) => *v as u32,
                     _ => return Err("'piece length' missing".into()),
                 },
                 pieces,
