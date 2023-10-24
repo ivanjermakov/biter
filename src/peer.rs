@@ -2,6 +2,8 @@ use anyhow::{ensure, Context, Error, Result};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::join;
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
@@ -180,7 +182,7 @@ pub async fn handshake(
     }
 }
 
-pub async fn read_message(stream: &mut TcpStream) -> Result<Message> {
+pub async fn read_message(stream: &mut OwnedReadHalf) -> Result<Message> {
     fn u32_from_slice(slice: &[u8]) -> Result<u32> {
         Ok(u32::from_be_bytes(slice.try_into()?))
     }
@@ -245,7 +247,7 @@ pub async fn read_message(stream: &mut TcpStream) -> Result<Message> {
     Ok(msg)
 }
 
-pub async fn send_message(stream: &mut TcpStream, message: Message) -> Result<()> {
+pub async fn send_message(stream: &mut OwnedWriteHalf, message: Message) -> Result<()> {
     debug!(">>> sending message: {:?}", message);
     let msg_p: Vec<u8> = message.into();
     trace!("raw message: {}", hex(&msg_p));
@@ -259,93 +261,142 @@ pub async fn handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()>
         let state = state.lock().await;
         (state.info_hash.clone(), state.peer_id.clone())
     };
-    match handshake(&peer, &info_hash, &peer_id).await {
-        Ok(mut stream) => {
-            info!("successfull handshake with peer {:?}", peer);
-            send_message(&mut stream, Message::Unchoke).await?;
-            send_message(&mut stream, Message::Interested).await?;
+    let stream = handshake(&peer, &info_hash, &peer_id)
+        .await
+        .context("handshake error")?;
+    info!("successfull handshake with peer {:?}", peer);
 
-            loop {
-                let mut piece = match { state.lock().await.next_piece() } {
-                    Some(p) => p,
-                    None => return Ok(()),
-                };
-                info!("next piece to request: {:?}", piece);
-                let total_blocks = (piece.length as f64 / BLOCK_SIZE as f64).ceil() as u32;
+    let (r_stream, mut w_stream) = stream.into_split();
 
-                loop {
-                    match read_message(&mut stream).await {
-                        Ok(Message::Choke) => continue,
-                        Ok(Message::Unchoke) => {
-                            for i in 0..total_blocks {
-                                let request_msg = Message::Request {
-                                    piece_index: piece.index,
-                                    begin: i * BLOCK_SIZE,
-                                    length: if i == total_blocks - 1
-                                        && piece.length % BLOCK_SIZE != 0
-                                    {
-                                        piece.length % BLOCK_SIZE
-                                    } else {
-                                        BLOCK_SIZE
-                                    },
-                                };
-                                send_message(&mut stream, request_msg).await?;
-                            }
-                        }
-                        Ok(Message::Piece {
-                            piece_index,
-                            begin,
-                            block,
-                        }) => {
-                            if piece_index != piece.index as u32 {
-                                debug!("block for another piece, ignoring");
-                                continue;
-                            }
-                            if begin % BLOCK_SIZE != 0 {
-                                warn!("block begin is not a multiple of block size");
-                                continue;
-                            }
-                            let block_index = begin / BLOCK_SIZE;
-                            if block_index != total_blocks - 1
-                                && block.0.len() != BLOCK_SIZE as usize
-                            {
-                                warn!("block of unexpected size: {}", block.0.len());
-                                continue;
-                            }
-                            piece.blocks.insert(block_index, block);
-                            debug!("got block {}/{}", piece.blocks.len(), total_blocks);
-                            if piece.blocks.len() as u32 == total_blocks {
-                                let piece_data: Vec<u8> = piece
-                                    .blocks
-                                    .values()
-                                    .flat_map(|b| b.0.as_slice())
-                                    .copied()
-                                    .collect();
-                                let piece_hash = sha1::encode(piece_data);
-                                if piece_hash != piece.hash.0 {
-                                    warn!("piece hash does not match: {:?}", piece);
-                                    trace!("{}", hex(&piece_hash));
-                                    trace!("{}", hex(&piece.hash.0));
-                                    continue;
-                                }
-                                info!("piece completed: {:?}", piece);
-                                piece.completed = true;
-                                state.lock().await.pieces.insert(piece.index, piece.clone());
-                                break;
-                            }
-                        }
-                        Ok(msg) => {
-                            debug!("no handler for message, skipping: {:?}", msg);
-                        }
-                        Err(e) => {
-                            warn!("{}", e);
-                            break;
-                        }
-                    };
+    send_message(&mut w_stream, Message::Unchoke).await?;
+    send_message(&mut w_stream, Message::Interested).await?;
+
+    let (w_res, r_res) = join!(
+        {
+            let state = state.clone();
+            write_loop(w_stream, peer.clone(), state)
+        },
+        {
+            let state = state.clone();
+            read_loop(r_stream, peer.clone(), state)
+        }
+    );
+    w_res.context("write error")?;
+    r_res.context("read error")?;
+
+    Ok(())
+}
+
+pub async fn write_loop(
+    mut stream: OwnedWriteHalf,
+    peer: PeerInfo,
+    state: Arc<Mutex<State>>,
+) -> Result<()> {
+    loop {
+        match state.lock().await.peers.get(&peer.peer_id) {
+            Some(p) => {
+                if p.choked {
+                    trace!("peer is choked, waiting");
+                    continue;
                 }
             }
+            _ => debug!("no peer {:?}", peer),
         }
-        Err(e) => warn!("handshake error: {}", e),
-    };
-    Ok(())
+        let piece = match { state.lock().await.next_piece() } {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+        debug!("next request piece: {:?}", piece);
+        let total_blocks = piece.total_blocks();
+
+        for i in 0..total_blocks {
+            let request_msg = Message::Request {
+                piece_index: piece.index,
+                begin: i * BLOCK_SIZE,
+                length: if i == total_blocks - 1 && piece.length % BLOCK_SIZE != 0 {
+                    piece.length % BLOCK_SIZE
+                } else {
+                    BLOCK_SIZE
+                },
+            };
+            send_message(&mut stream, request_msg).await?;
+        }
+        // sleep(Duration::new(0, 100e6 as u32)).await;
+    }
+}
+
+async fn read_loop(
+    mut stream: OwnedReadHalf,
+    peer: PeerInfo,
+    state: Arc<Mutex<State>>,
+) -> Result<()> {
+    loop {
+        match read_message(&mut stream).await {
+            Ok(Message::Choke) => match state.lock().await.peers.get_mut(&peer.peer_id) {
+                Some(p) => p.choked = true,
+                _ => debug!("no peer with id {:?}", peer.peer_id),
+            },
+            Ok(Message::Unchoke) => match state.lock().await.peers.get_mut(&peer.peer_id) {
+                Some(p) => p.choked = false,
+                _ => debug!("no peer with id {:?}", peer.peer_id),
+            },
+            Ok(Message::Piece {
+                piece_index,
+                begin,
+                block,
+            }) => {
+                if begin % BLOCK_SIZE != 0 {
+                    warn!("block begin is not a multiple of block size");
+                    continue;
+                }
+                let block_index = begin / BLOCK_SIZE;
+                let mut state = state.lock().await;
+                let piece = match state.pieces.get_mut(&piece_index) {
+                    Some(p) => p,
+                    _ => {
+                        debug!("no piece with index {:?}", piece_index);
+                        continue;
+                    }
+                };
+                if piece.completed {
+                    continue;
+                }
+                let total_blocks = piece.total_blocks();
+                if block_index != total_blocks - 1 && block.0.len() != BLOCK_SIZE as usize {
+                    warn!("block of unexpected size: {}", block.0.len());
+                    continue;
+                }
+                piece.blocks.insert(block_index, block);
+                debug!("got block {}/{}", piece.blocks.len(), total_blocks);
+                if piece.blocks.len() as u32 == total_blocks {
+                    let piece_data: Vec<u8> = piece
+                        .blocks
+                        .values()
+                        .flat_map(|b| b.0.as_slice())
+                        .copied()
+                        .collect();
+                    let piece_hash = sha1::encode(piece_data);
+                    if piece_hash != piece.hash.0 {
+                        warn!("piece hash does not match: {:?}", piece);
+                        trace!("{}", hex(&piece_hash));
+                        trace!("{}", hex(&piece.hash.0));
+                        continue;
+                    }
+                    piece.completed = true;
+                    info!(
+                        "piece completed {}/{}",
+                        state.pieces.values().filter(|p| p.completed).count(),
+                        state.pieces.len(),
+                    );
+                }
+            }
+            Ok(msg) => {
+                debug!("no handler for message, skipping: {:?}", msg);
+            }
+            Err(e) => {
+                warn!("{}", e);
+                return Err(e);
+            }
+        };
+    }
 }

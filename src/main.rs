@@ -76,7 +76,6 @@ async fn main() -> Result<()> {
         let handles = resp
             .peers
             .into_iter()
-            .take(4)
             .map(|p| {
                 let state = state.clone();
                 handle_peer(p, state)

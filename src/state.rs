@@ -40,6 +40,12 @@ pub struct Piece {
     pub completed: bool,
 }
 
+impl Piece {
+    pub fn total_blocks(&self) -> u32 {
+        (self.length as f64 / BLOCK_SIZE as f64).ceil() as u32
+    }
+}
+
 #[derive(Clone, PartialEq, PartialOrd, Hash)]
 pub struct PieceHash(pub ByteString);
 
