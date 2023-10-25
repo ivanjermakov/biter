@@ -1,5 +1,5 @@
 use anyhow::{anyhow, ensure, Context, Error, Result};
-use futures::future::join_all;
+use futures::future;
 use std::path::Path;
 use std::{collections::BTreeMap, fs, path::PathBuf, sync::Arc};
 use tokio::{spawn, sync::Mutex};
@@ -52,24 +52,24 @@ pub async fn download_torrent(path: &Path, peer_id: &ByteString) -> Result<()> {
         peers: BTreeMap::new(),
     }));
 
-    if let TrackerResponse::Success(resp) = tracker_response {
-        let handles = resp
-            .peers
+    let resp = match tracker_response {
+        TrackerResponse::Success(r) => r,
+        TrackerResponse::Failure { failure_reason } => return Err(Error::msg(failure_reason)),
+    };
+    future::join_all(
+        resp.peers
             .into_iter()
-            .map(|p| {
-                spawn({
-                    let state = state.clone();
-                    handle_peer(p, state)
-                })
-            })
-            .collect::<Vec<_>>();
-        join_all(handles).await;
-    }
+            .map(|p| spawn(handle_peer(p, state.clone())))
+            .collect::<Vec<_>>(),
+    )
+    .await;
 
-    debug!("verifying downloaded pieces");
+    trace!("unwrapping state");
     let state = Arc::try_unwrap(state)
         .map_err(|_| Error::msg("dangling state reference"))?
         .into_inner();
+
+    debug!("verifying downloaded pieces");
     ensure!(
         state.pieces.len() == state.metainfo.info.pieces.len(),
         "pieces length mismatch"
@@ -79,6 +79,11 @@ pub async fn download_torrent(path: &Path, peer_id: &ByteString) -> Result<()> {
         "incomplete pieces"
     );
 
+    write_to_disk(state, metainfo).await?;
+    Ok(())
+}
+
+async fn write_to_disk(state: State, metainfo: Metainfo) -> Result<()> {
     info!("partitioning pieces into files");
     let mut data: Vec<u8> = state
         .pieces
@@ -104,8 +109,7 @@ pub async fn download_torrent(path: &Path, peer_id: &ByteString) -> Result<()> {
             .join(file.path.clone());
         write_handles.push(spawn(write_file(path, file_data)))
     }
-
-    let write_res = join_all(write_handles).await;
+    let write_res = future::join_all(write_handles).await;
     if write_res.into_iter().filter(|r| r.is_err()).count() != 0 {
         return Err(Error::msg("file write errors"));
     }

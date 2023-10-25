@@ -1,4 +1,5 @@
 use anyhow::{ensure, Context, Error, Result};
+use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::{
@@ -140,6 +141,15 @@ impl TryFrom<Vec<u8>> for Message {
             peer_id: value.as_slice()[48..68].to_vec(),
         })
     }
+}
+
+/// Generate random 20 byte string, starting with -<2 byte client name><4 byte client version>-
+pub fn generate_peer_id() -> ByteString {
+    let rand = thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(12)
+        .collect::<Vec<_>>();
+    ["-ER0000-".as_bytes(), &rand].concat()
 }
 
 pub async fn handshake(

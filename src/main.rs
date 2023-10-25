@@ -2,11 +2,9 @@
 extern crate log;
 
 use anyhow::Result;
-use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::path::PathBuf;
-use torrent::download_torrent;
 
-use types::ByteString;
+use crate::{peer::generate_peer_id, torrent::download_torrent};
 
 mod bencode;
 mod hex;
@@ -29,13 +27,4 @@ async fn main() -> Result<()> {
 
     let path = PathBuf::from("data/academic_test.torrent");
     download_torrent(&path, &peer_id).await
-}
-
-/// Generate random 20 byte string, starting with -<2 byte client name><4 byte client version>-
-fn generate_peer_id() -> ByteString {
-    let rand = thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(12)
-        .collect::<Vec<_>>();
-    ["-ER0000-".as_bytes(), &rand].concat()
 }
