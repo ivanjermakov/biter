@@ -418,7 +418,7 @@ async fn read_loop(
                 debug!("no handler for message, skipping: {:?}", msg);
             }
             Err(e) => {
-                warn!("{}", e);
+                warn!("{:#}", e);
                 return Err(e);
             }
         };

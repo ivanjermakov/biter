@@ -15,15 +15,16 @@ use crate::{
 };
 
 pub async fn download_torrent(path: &Path, peer_id: &ByteString) -> Result<()> {
+    debug!("reading torrent file: {:?}", path);
     let bencoded = fs::read(path).context("no metadata file")?;
     let metainfo_dict = match parse_bencoded(bencoded) {
         (Some(metadata), left) if left.is_empty() => metadata,
-        _ => panic!("metadata file parsing error"),
+        _ => return Err(Error::msg("metadata file parsing error")),
     };
     debug!("metainfo dict: {metainfo_dict:?}");
     let metainfo = match Metainfo::try_from(metainfo_dict.clone()) {
         Ok(info) => info,
-        Err(e) => panic!("metadata file structure error: {e}"),
+        Err(e) => return Err(Error::msg(e).context("metadata file structure error")),
     };
     info!("metainfo: {metainfo:?}");
     let info_dict_str = match metainfo_dict {
@@ -123,7 +124,7 @@ async fn write_file(path: PathBuf, data: Vec<u8>) -> Result<()> {
     tokio::fs::create_dir_all(&path.parent().context("no parent")?).await?;
     let res = tokio::fs::write(&path, &data).await;
     if let Err(e) = res {
-        error!("file write error: {e}");
+        error!("file write error: {e:#}");
         return Err(anyhow!(e));
     }
     info!("file written ({} bytes): {:?}", data.len(), path);
