@@ -1,15 +1,16 @@
 use anyhow::{anyhow, ensure, Context, Error, Result};
 use futures::future;
 use std::path::Path;
-use std::{collections::BTreeMap, fs, path::PathBuf, sync::Arc};
+use std::{fs, path::PathBuf, sync::Arc};
 use tokio::{spawn, sync::Mutex};
 
 use crate::{
     bencode::{parse_bencoded, BencodeValue},
     metainfo::{FileInfo, Metainfo, PathInfo},
-    peer::handle_peer,
+    peer::peer_loop,
     sha1,
     state::{init_pieces, State},
+    state::{Peer, TorrentStatus},
     tracker::{tracker_request, TrackerEvent, TrackerRequest, TrackerResponse},
     types::ByteString,
 };
@@ -45,25 +46,27 @@ pub async fn download_torrent(path: &Path, peer_id: &ByteString) -> Result<()> {
     .context("request failed")?;
     info!("tracker response: {tracker_response:?}");
 
+    let resp = match tracker_response {
+        TrackerResponse::Success(r) => r,
+        TrackerResponse::Failure { failure_reason } => return Err(Error::msg(failure_reason)),
+    };
+
     let state = Arc::new(Mutex::new(State {
         metainfo: metainfo.clone(),
         info_hash,
         peer_id: peer_id.to_vec(),
         pieces: init_pieces(&metainfo.info),
-        peers: BTreeMap::new(),
-    }));
-
-    let resp = match tracker_response {
-        TrackerResponse::Success(r) => r,
-        TrackerResponse::Failure { failure_reason } => return Err(Error::msg(failure_reason)),
-    };
-    future::join_all(
-        resp.peers
+        peers: resp
+            .peers
             .into_iter()
-            .map(|p| spawn(handle_peer(p, state.clone())))
-            .collect::<Vec<_>>(),
-    )
-    .await;
+            .map(|p| (p.peer_id.clone(), Peer::new(p)))
+            .collect(),
+        status: TorrentStatus::Started,
+    }));
+    trace!("init state: {:?}", state);
+
+    debug!("connecting to peers");
+    peer_loop(state.clone()).await?;
 
     trace!("unwrapping state");
     let state = Arc::try_unwrap(state)
@@ -80,33 +83,35 @@ pub async fn download_torrent(path: &Path, peer_id: &ByteString) -> Result<()> {
         "incomplete pieces"
     );
 
-    write_to_disk(state, metainfo).await?;
+    info!("writing files to disk");
+    write_to_disk(state).await?;
     Ok(())
 }
 
-async fn write_to_disk(state: State, metainfo: Metainfo) -> Result<()> {
-    info!("partitioning pieces into files");
+async fn write_to_disk(mut state: State) -> Result<()> {
+    debug!("partitioning pieces into files");
     let mut data: Vec<u8> = state
         .pieces
         .into_values()
         .flat_map(|p| p.blocks.into_values().flat_map(|b| b.0))
         .collect();
 
-    let files = match metainfo.info.file_info {
+    let files = match state.metainfo.info.file_info {
         FileInfo::Single { length, md5_sum } => vec![PathInfo {
             length,
-            path: PathBuf::from(&metainfo.info.name),
+            path: PathBuf::from(&state.metainfo.info.name),
             md5_sum,
         }],
         FileInfo::Multi { files } => files,
     };
 
+    // TODO: check files md5_sum
     info!("writing files");
     let mut write_handles = vec![];
     for file in files {
         let file_data = data.drain(0..file.length as usize).collect();
         let path = PathBuf::from("download")
-            .join(&metainfo.info.name)
+            .join(&state.metainfo.info.name)
             .join(file.path.clone());
         write_handles.push(spawn(write_file(path, file_data)))
     }
@@ -115,7 +120,8 @@ async fn write_to_disk(state: State, metainfo: Metainfo) -> Result<()> {
         return Err(Error::msg("file write errors"));
     }
 
-    info!("torrent downloaded: {}", metainfo.info.name);
+    state.status = TorrentStatus::Saved;
+    info!("torrent downloaded: {}", state.metainfo.info.name);
     Ok(())
 }
 

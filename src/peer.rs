@@ -8,7 +8,7 @@ use tokio::{
         tcp::{OwnedReadHalf, OwnedWriteHalf},
         TcpStream,
     },
-    select,
+    select, spawn,
     sync::Mutex,
     time::{sleep, timeout},
 };
@@ -16,7 +16,7 @@ use tokio::{
 use crate::{
     hex::hex,
     sha1,
-    state::{Block, Peer, PeerInfo, State, BLOCK_SIZE},
+    state::{Block, Peer, PeerInfo, PeerStatus, State, TorrentStatus, BLOCK_SIZE},
     types::ByteString,
 };
 
@@ -159,7 +159,7 @@ pub async fn handshake(
 ) -> Result<TcpStream> {
     debug!("connecting to peer {peer:?}");
     let mut stream = timeout(
-        Duration::new(4, 0),
+        Duration::from_secs(4),
         TcpStream::connect(format!("{}:{}", peer.ip, peer.port)),
     )
     .await??;
@@ -169,7 +169,7 @@ pub async fn handshake(
     }
     .into();
 
-    debug!("writing handshake {}", hex(&handshake.to_vec()));
+    trace!("writing handshake {}", hex(&handshake.to_vec()));
     stream.write_all(&handshake).await.context("write error")?;
     stream.flush().await?;
 
@@ -259,12 +259,12 @@ pub async fn read_message(stream: &mut OwnedReadHalf) -> Result<Message> {
             }
         }
     }?;
-    debug!("<<< read message: {:?}", msg);
+    trace!("<<< read message: {:?}", msg);
     Ok(msg)
 }
 
 pub async fn send_message(stream: &mut OwnedWriteHalf, message: Message) -> Result<()> {
-    debug!(">>> sending message: {:?}", message);
+    trace!(">>> sending message: {:?}", message);
     let msg_p: Vec<u8> = message.into();
     trace!("raw message: {}", hex(&msg_p));
     stream.write_all(&msg_p).await?;
@@ -272,12 +272,88 @@ pub async fn send_message(stream: &mut OwnedWriteHalf, message: Message) -> Resu
     Ok(())
 }
 
-pub async fn handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()> {
-    let (info_hash, peer_id) = {
-        let mut state = state.lock().await;
-        state
+pub async fn peer_loop(state: Arc<Mutex<State>>) -> Result<()> {
+    let mut handles = vec![];
+    loop {
+        debug!("reconnecting peers");
+        let peers: Vec<PeerInfo> = state
+            .lock()
+            .await
             .peers
-            .insert(peer.peer_id.clone(), Peer::new(peer.clone()));
+            .values()
+            .filter(|p| p.status == PeerStatus::Disconnected)
+            .map(|p| p.info.clone())
+            .collect();
+        trace!("disconnected peers: {}", peers.len());
+        peers.into_iter().for_each(|p| {
+            let state = state.clone();
+            handles.push(spawn(async {
+                if let Err(e) = handle_peer(p, state).await.context("peer error") {
+                    debug!("{e:#}");
+                };
+            }));
+        });
+        select!(
+            _ = async {
+                loop {
+                    if state.lock().await.status == TorrentStatus::Downloaded {
+                        return;
+                    }
+                    sleep(Duration::from_millis(1000)).await
+                }
+            } => {
+                // this is important to ensure that no tasks hold Arc<State> reference
+                trace!("closing {} peer connections", handles.len());
+                for h in handles {
+                    h.abort();
+                    let _ = h.await;
+                }
+                trace!("peer connections closed");
+                return Ok(())
+            },
+            _ = sleep(Duration::from_secs(10)) => ()
+        );
+    }
+}
+
+pub async fn handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()> {
+    {
+        debug!("connecting to peer: {:?}", peer);
+        let mut state = state.lock().await;
+        match state.peers.get_mut(&peer.peer_id) {
+            Some(p) if p.status == PeerStatus::Connected => {
+                return Err(Error::msg("peer is already connected"))
+            }
+            Some(p) => p.status = PeerStatus::Connected,
+            None => {
+                let mut p = Peer::new(peer.clone());
+                p.status = PeerStatus::Connected;
+                state.peers.insert(peer.peer_id.clone(), p);
+            }
+        };
+    };
+
+    let res = do_handle_peer(peer.clone(), state.clone()).await;
+
+    debug!("peer disconnected: {:?}", peer);
+    state
+        .lock()
+        .await
+        .peers
+        .get_mut(&peer.peer_id)
+        .context("no peer")?
+        .status = if res.is_err() {
+        PeerStatus::Disconnected
+    } else {
+        PeerStatus::Done
+    };
+
+    res
+}
+
+pub async fn do_handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()> {
+    let (info_hash, peer_id) = {
+        let state = state.lock().await;
         (state.info_hash.clone(), state.peer_id.clone())
     };
     let stream = handshake(&peer, &info_hash, &peer_id)
@@ -286,7 +362,7 @@ pub async fn handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()>
     info!("successfull handshake with peer {:?}", peer);
 
     if let Some(p) = state.lock().await.peers.get_mut(&peer.peer_id) {
-        p.connected = true;
+        p.status = PeerStatus::Connected;
     }
 
     let (r_stream, mut w_stream) = stream.into_split();
@@ -323,13 +399,15 @@ pub async fn write_loop(
             }
             _ => debug!("no peer {:?}", peer),
         }
-        let piece = match { state.lock().await.next_piece() } {
+
+        let piece = match state.lock().await.next_piece() {
             Some(p) => p,
-            None => {
+            _ => {
                 debug!("no more pieces to request, disconnecting");
                 return Ok(());
             }
         };
+
         debug!("next request piece: {:?}", piece);
         let total_blocks = piece.total_blocks();
 
@@ -345,7 +423,7 @@ pub async fn write_loop(
             };
             send_message(&mut stream, request_msg).await?;
         }
-        sleep(Duration::new(0, 100e6 as u32)).await;
+        sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -383,15 +461,18 @@ async fn read_loop(
                     }
                 };
                 if piece.completed {
+                    debug!("downloaded block of already completed piece, loss");
                     continue;
                 }
                 let total_blocks = piece.total_blocks();
                 if block_index != total_blocks - 1 && block.0.len() != BLOCK_SIZE as usize {
-                    warn!("block of unexpected size: {}", block.0.len());
+                    debug!("block of unexpected size: {}", block.0.len());
                     continue;
                 }
-                piece.blocks.insert(block_index, block);
-                debug!("got block {}/{}", piece.blocks.len(), total_blocks);
+                if piece.blocks.insert(block_index, block).is_some() {
+                    debug!("repeaded block download, loss");
+                };
+                trace!("got block {}/{}", piece.blocks.len(), total_blocks);
                 if piece.blocks.len() as u32 == total_blocks {
                     let piece_data: Vec<u8> = piece
                         .blocks

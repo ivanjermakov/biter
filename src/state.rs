@@ -18,16 +18,30 @@ pub struct State {
     pub peer_id: Vec<u8>,
     pub pieces: BTreeMap<u32, Piece>,
     pub peers: BTreeMap<ByteString, Peer>,
+    pub status: TorrentStatus,
 }
 
 impl State {
-    pub fn next_piece(&self) -> Option<Piece> {
-        self.pieces
+    pub fn next_piece(&mut self) -> Option<Piece> {
+        let piece = self
+            .pieces
             .values()
             .filter(|p| !p.completed)
             .choose(&mut thread_rng())
-            .cloned()
+            .cloned();
+        if piece.is_none() {
+            debug!("torrent is completed");
+            self.status = TorrentStatus::Downloaded;
+        }
+        piece
     }
+}
+
+#[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
+pub enum TorrentStatus {
+    Started,
+    Downloaded,
+    Saved,
 }
 
 #[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
@@ -67,7 +81,7 @@ impl fmt::Debug for Block {
 #[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
 pub struct Peer {
     pub info: PeerInfo,
-    pub connected: bool,
+    pub status: PeerStatus,
     pub am_choked: bool,
     pub am_interested: bool,
     pub choked: bool,
@@ -79,7 +93,7 @@ impl Peer {
     pub fn new(info: PeerInfo) -> Peer {
         Peer {
             info,
-            connected: false,
+            status: PeerStatus::Disconnected,
             am_choked: true,
             am_interested: false,
             choked: true,
@@ -87,6 +101,13 @@ impl Peer {
             bitfield: None,
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
+pub enum PeerStatus {
+    Disconnected,
+    Connected,
+    Done,
 }
 
 #[derive(Clone, PartialEq, PartialOrd, Hash)]
