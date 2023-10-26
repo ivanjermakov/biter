@@ -1,12 +1,14 @@
 use core::fmt;
+use std::sync::Arc;
 
 use anyhow::{Context, Error, Result};
 use reqwest::Client;
+use tokio::{spawn, sync::Mutex, time::sleep};
 use urlencoding::encode_binary;
 
 use crate::{
     bencode::{parse_bencoded, BencodeValue},
-    state::PeerInfo,
+    state::{Peer, PeerInfo, PeerStatus, State},
     types::ByteString,
 };
 
@@ -20,7 +22,7 @@ pub struct TrackerRequest {
     left: i64,
     compact: i64,
     no_peer_id: i64,
-    event: TrackerEvent,
+    event: Option<TrackerEvent>,
     ip: Option<ByteString>,
     numwant: Option<i64>,
     key: Option<ByteString>,
@@ -31,7 +33,7 @@ impl TrackerRequest {
     pub fn new(
         info_hash: ByteString,
         peer_id: ByteString,
-        event: TrackerEvent,
+        event: Option<TrackerEvent>,
         tracker_id: Option<ByteString>,
     ) -> TrackerRequest {
         TrackerRequest {
@@ -59,7 +61,7 @@ impl TrackerRequest {
     }
 
     pub fn to_params(&self) -> Vec<(String, String)> {
-        let params: Vec<(&str, Vec<u8>)> = vec![
+        let mut params: Vec<(&str, Vec<u8>)> = vec![
             ("info_hash", self.info_hash.clone()),
             ("peer_id", self.peer_id.clone()),
             ("port", self.port.to_string().into()),
@@ -68,8 +70,11 @@ impl TrackerRequest {
             ("left", self.left.to_string().into()),
             ("compact", self.compact.to_string().into()),
             ("no_peer_id", self.no_peer_id.to_string().into()),
-            ("event", self.event.to_string().into()),
         ];
+
+        if let Some(event) = &self.event {
+            params.push(("event", event.to_string().into()));
+        }
 
         params
             .iter()
@@ -191,10 +196,8 @@ pub async fn tracker_request(announce: String, request: TrackerRequest) -> Resul
     );
     let url = format!("{announce}{params}");
     debug!("url: {url}");
-    let resp = Client::new()
-        .get(url)
-        .send()
-        .await
+    let resp = spawn(Client::new().get(url).send())
+        .await?
         .context("request error")?
         .bytes()
         .await
@@ -205,4 +208,61 @@ pub async fn tracker_request(announce: String, request: TrackerRequest) -> Resul
         .context("malformed response")?;
     debug!("response: {resp_dict:?}");
     TrackerResponse::try_from(resp_dict).map_err(Error::msg)
+}
+
+pub async fn tracker_loop(state: Arc<Mutex<State>>) {
+    loop {
+        let (announce, info_hash, peer_id, tracker_timeout) = {
+            let state = state.lock().await;
+            (
+                state.metainfo.announce.clone(),
+                state.info_hash.clone(),
+                state.peer_id.clone(),
+                state.tracker_timeout.clone(),
+            )
+        };
+        // TODO: include tracker id
+        let tracker_response = tracker_request(
+            announce,
+            TrackerRequest::new(info_hash, peer_id, None, None),
+        )
+        .await
+        .context("request failed");
+        info!("tracker response: {tracker_response:?}");
+
+        // TODO: in case of error, try trackers from announce-list
+        match tracker_response {
+            Ok(TrackerResponse::Success(resp)) => {
+                let mut state = state.lock().await;
+                let new_peers: Vec<_> = resp
+                    .peers
+                    .into_iter()
+                    .filter(|p| state.peers.contains_key(&p.peer_id))
+                    .map(Peer::new)
+                    .collect();
+                info!("received {} new peers", new_peers.len());
+                for p in new_peers {
+                    state.peers.insert(p.info.peer_id.clone(), p);
+                }
+                info!(
+                    "total {} peers, {} connected",
+                    state.peers.len(),
+                    state
+                        .peers
+                        .values()
+                        .filter(|p| p.status == PeerStatus::Connected)
+                        .count()
+                );
+            }
+            Ok(TrackerResponse::Failure { failure_reason }) => {
+                debug!("tracker failure: {}", failure_reason);
+            }
+            Err(e) => {
+                debug!("{e:#}");
+            }
+        };
+
+        debug!("tracker timeout is {:?}", tracker_timeout);
+        sleep(tracker_timeout).await;
+    }
 }

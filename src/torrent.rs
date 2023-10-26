@@ -1,17 +1,18 @@
 use anyhow::{anyhow, ensure, Context, Error, Result};
 use futures::future;
 use std::path::Path;
+use std::time::Duration;
 use std::{fs, path::PathBuf, sync::Arc};
 use tokio::{spawn, sync::Mutex};
 
+use crate::abort::EnsureAbort;
 use crate::{
     bencode::{parse_bencoded, BencodeValue},
     metainfo::{FileInfo, Metainfo, PathInfo},
     peer::peer_loop,
     sha1,
-    state::{init_pieces, State},
-    state::{Peer, TorrentStatus},
-    tracker::{tracker_request, TrackerEvent, TrackerRequest, TrackerResponse},
+    state::{init_pieces, Peer, State, TorrentStatus},
+    tracker::{tracker_loop, tracker_request, TrackerEvent, TrackerRequest, TrackerResponse},
     types::ByteString,
 };
 
@@ -38,7 +39,7 @@ pub async fn download_torrent(path: &Path, peer_id: &ByteString) -> Result<()> {
         TrackerRequest::new(
             info_hash.clone(),
             peer_id.to_vec(),
-            TrackerEvent::Started,
+            Some(TrackerEvent::Started),
             None,
         ),
     )
@@ -53,6 +54,7 @@ pub async fn download_torrent(path: &Path, peer_id: &ByteString) -> Result<()> {
 
     let state = Arc::new(Mutex::new(State {
         metainfo: metainfo.clone(),
+        tracker_timeout: Duration::from_secs(resp.interval as u64),
         info_hash,
         peer_id: peer_id.to_vec(),
         pieces: init_pieces(&metainfo.info),
@@ -65,8 +67,12 @@ pub async fn download_torrent(path: &Path, peer_id: &ByteString) -> Result<()> {
     }));
     trace!("init state: {:?}", state);
 
+    let peer_loop_h = spawn(peer_loop(state.clone()));
+    let tracker_loop_h = spawn(tracker_loop(state.clone()));
     debug!("connecting to peers");
-    peer_loop(state.clone()).await?;
+    peer_loop_h.await??;
+    trace!("aborting tracker loop");
+    let _ = tracker_loop_h.ensure_abort().await;
 
     trace!("unwrapping state");
     let state = Arc::try_unwrap(state)
@@ -112,7 +118,7 @@ async fn write_to_disk(mut state: State) -> Result<()> {
         let file_data = data.drain(0..file.length as usize).collect();
         let path = PathBuf::from("download")
             .join(&state.metainfo.info.name)
-            .join(file.path.clone());
+            .join(file.path);
         write_handles.push(spawn(write_file(path, file_data)))
     }
     let write_res = future::join_all(write_handles).await;

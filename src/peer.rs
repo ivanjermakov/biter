@@ -293,6 +293,7 @@ pub async fn peer_loop(state: Arc<Mutex<State>>) -> Result<()> {
                 };
             }));
         });
+
         select!(
             _ = async {
                 loop {
@@ -390,14 +391,17 @@ pub async fn write_loop(
     state: Arc<Mutex<State>>,
 ) -> Result<()> {
     loop {
-        match state.lock().await.peers.get(&peer.peer_id) {
-            Some(p) => {
+        // TODO: make configurable
+        let respect_choke = true;
+        if respect_choke {
+            let p = state.lock().await.peers.get(&peer.peer_id).cloned();
+            if let Some(p) = p {
                 if p.choked {
-                    trace!("peer is choked, waiting");
+                    info!("peer is choked, waiting");
+                    sleep(Duration::from_millis(1000)).await;
                     continue;
                 }
             }
-            _ => debug!("no peer {:?}", peer),
         }
 
         let piece = match state.lock().await.next_piece() {
@@ -499,7 +503,7 @@ async fn read_loop(
                 debug!("no handler for message, skipping: {:?}", msg);
             }
             Err(e) => {
-                warn!("{:#}", e);
+                warn!("{e:#}");
                 return Err(e);
             }
         };

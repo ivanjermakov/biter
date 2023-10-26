@@ -1,5 +1,5 @@
 use core::fmt;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 use rand::{seq::IteratorRandom, thread_rng};
 
@@ -14,6 +14,7 @@ pub const BLOCK_SIZE: u32 = 1 << 14;
 #[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
 pub struct State {
     pub metainfo: Metainfo,
+    pub tracker_timeout: Duration,
     pub info_hash: Vec<u8>,
     pub peer_id: Vec<u8>,
     pub pieces: BTreeMap<u32, Piece>,
@@ -30,7 +31,7 @@ impl State {
             .choose(&mut thread_rng())
             .cloned();
         if piece.is_none() {
-            debug!("torrent is completed");
+            debug!("torrent is downloaded");
             self.status = TorrentStatus::Downloaded;
         }
         piece

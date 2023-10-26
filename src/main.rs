@@ -15,11 +15,12 @@ mod state;
 mod torrent;
 mod tracker;
 mod types;
+mod abort;
 
 #[tokio::main]
 async fn main() {
     if let Err(e) = try_main().await {
-        eprintln!("{:#}", e);
+        eprintln!("{e:#}");
         process::exit(1);
     }
 }
