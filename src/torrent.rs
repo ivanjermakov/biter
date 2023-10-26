@@ -1,6 +1,7 @@
 use anyhow::{anyhow, ensure, Context, Error, Result};
 use futures::future;
 use std::path::Path;
+use std::time::Instant;
 use std::{fs, path::PathBuf, sync::Arc};
 use tokio::{spawn, sync::Mutex};
 
@@ -17,6 +18,7 @@ use crate::{
 };
 
 pub async fn download_torrent(path: &Path, peer_id: &ByteString, config: &Config) -> Result<()> {
+    let started = Instant::now();
     debug!("reading torrent file: {:?}", path);
     let bencoded = fs::read(path).context("no metadata file")?;
     let metainfo_dict = match parse_bencoded(bencoded) {
@@ -93,6 +95,8 @@ pub async fn download_torrent(path: &Path, peer_id: &ByteString, config: &Config
 
     info!("writing files to disk");
     write_to_disk(state).await?;
+
+    info!("done in {}s", started.elapsed().as_secs());
     Ok(())
 }
 
@@ -129,7 +133,7 @@ async fn write_to_disk(mut state: State) -> Result<()> {
     }
 
     state.status = TorrentStatus::Saved;
-    info!("torrent downloaded: {}", state.metainfo.info.name);
+    info!("torrent saved: {}", state.metainfo.info.name);
     Ok(())
 }
 
