@@ -9,24 +9,25 @@ use urlencoding::encode_binary;
 use crate::{
     bencode::{parse_bencoded, BencodeValue},
     state::{Peer, PeerInfo, PeerStatus, State},
+    tracker_udp::tracker_request_udp,
     types::ByteString,
 };
 
 #[allow(dead_code)]
 pub struct TrackerRequest {
-    info_hash: ByteString,
-    peer_id: ByteString,
-    port: i64,
-    uploaded: i64,
-    downloaded: i64,
-    left: i64,
-    compact: i64,
-    no_peer_id: i64,
-    event: Option<TrackerEvent>,
-    ip: Option<ByteString>,
-    numwant: Option<i64>,
-    key: Option<ByteString>,
-    tracker_id: Option<ByteString>,
+    pub info_hash: ByteString,
+    pub peer_id: ByteString,
+    pub port: i64,
+    pub uploaded: i64,
+    pub downloaded: i64,
+    pub left: i64,
+    pub compact: i64,
+    pub no_peer_id: i64,
+    pub event: Option<TrackerEvent>,
+    pub ip: Option<ByteString>,
+    pub numwant: Option<i64>,
+    pub key: Option<ByteString>,
+    pub tracker_id: Option<ByteString>,
 }
 
 impl TrackerRequest {
@@ -184,6 +185,22 @@ pub struct TrackerResponseSuccess {
 }
 
 pub async fn tracker_request(announce: String, request: TrackerRequest) -> Result<TrackerResponse> {
+    if announce.starts_with("http") {
+        tracker_request_http(announce, request).await
+    } else if announce.starts_with("udp") {
+        tracker_request_udp(announce, request).await
+    } else {
+        Err(Error::msg(format!(
+            "unsupported tracker url scheme: {}",
+            announce
+        )))
+    }
+}
+
+pub async fn tracker_request_http(
+    announce: String,
+    request: TrackerRequest,
+) -> Result<TrackerResponse> {
     let params = format!(
         "?{}",
         request
