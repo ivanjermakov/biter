@@ -7,7 +7,7 @@ use crate::{bencode::BencodeValue, state::PieceHash};
 pub struct Metainfo {
     pub info: Info,
     pub announce: String,
-    pub announce_list: Option<Vec<String>>,
+    pub announce_list: Option<Vec<Vec<String>>>,
     pub creation_date: Option<i64>,
     pub comment: Option<String>,
     pub created_by: Option<String>,
@@ -74,35 +74,27 @@ impl TryFrom<BencodeValue> for Metainfo {
             _ => return Err("'info' is not a dict".into()),
         };
         let pieces: Vec<PieceHash> = match info_dict.get("pieces") {
-            Some(BencodeValue::String(s)) => s
-                .as_slice()
-                .chunks(20)
-                .map(|c| PieceHash(c.to_vec()))
-                .collect(),
+            Some(BencodeValue::String(s)) => s.chunks(20).map(|c| PieceHash(c.to_vec())).collect(),
             _ => return Err("'pieces' missing".into()),
         };
         let name = match info_dict.get("name") {
-            Some(BencodeValue::String(s)) => String::from_utf8_lossy(s.as_slice()).into(),
+            Some(BencodeValue::String(s)) => String::from_utf8_lossy(s).into(),
             _ => return Err("'name' missing".into()),
         };
         let file_info = match info_dict.get("files") {
             Some(d) => FileInfo::Multi {
                 files: parse_files_info(d)?,
             },
-            None => {
-                FileInfo::Single {
-                    length: match info_dict.get("length") {
-                        Some(BencodeValue::Int(v)) => *v,
-                        _ => return Err("'length' missing".into()),
-                    },
-                    md5_sum: match info_dict.get("md5_sum") {
-                        Some(BencodeValue::String(s)) => {
-                            Some(String::from_utf8_lossy(s).to_string())
-                        }
-                        _ => None,
-                    },
-                }
-            }
+            None => FileInfo::Single {
+                length: match info_dict.get("length") {
+                    Some(BencodeValue::Int(v)) => *v,
+                    _ => return Err("'length' missing".into()),
+                },
+                md5_sum: match info_dict.get("md5_sum") {
+                    Some(BencodeValue::String(s)) => Some(String::from_utf8_lossy(s).to_string()),
+                    _ => None,
+                },
+            },
         };
         let metainfo = Metainfo {
             info: Info {
@@ -113,23 +105,47 @@ impl TryFrom<BencodeValue> for Metainfo {
                 pieces,
                 name,
                 file_info,
-                // TODO
-                private: None,
+                private: match info_dict.get("private") {
+                    Some(BencodeValue::Int(i)) => Some(*i == 1),
+                    _ => None,
+                },
             },
             announce: match dict.get("announce") {
-                Some(BencodeValue::String(s)) => String::from_utf8_lossy(s.as_slice()).into(),
+                Some(BencodeValue::String(s)) => String::from_utf8_lossy(s).into(),
                 _ => return Err("'announce' missing".into()),
             },
-            // TODO
-            announce_list: None,
-            // TODO
-            creation_date: None,
-            // TODO
-            comment: None,
-            // TODO
-            created_by: None,
-            // TODO
-            encoding: None,
+            announce_list: match dict.get("announce-list") {
+                Some(BencodeValue::List(l)) => l
+                    .iter()
+                    .map(|i| match i {
+                        BencodeValue::List(nl) => nl
+                            .iter()
+                            .map(|ni| match ni {
+                                BencodeValue::String(s) => Some(String::from_utf8_lossy(s).into()),
+                                _ => None,
+                            })
+                            .collect::<Option<Vec<String>>>(),
+                        _ => None,
+                    })
+                    .collect::<Option<_>>(),
+                _ => None,
+            },
+            creation_date: match dict.get("creation date") {
+                Some(BencodeValue::Int(i)) => Some(*i),
+                _ => None,
+            },
+            comment: match dict.get("comment") {
+                Some(BencodeValue::String(s)) => Some(String::from_utf8_lossy(s).into()),
+                _ => None,
+            },
+            created_by: match dict.get("created by") {
+                Some(BencodeValue::String(s)) => Some(String::from_utf8_lossy(s).into()),
+                _ => None,
+            },
+            encoding: match dict.get("encoding") {
+                Some(BencodeValue::String(s)) => Some(String::from_utf8_lossy(s).into()),
+                _ => None,
+            },
         };
         Ok(metainfo)
     }
@@ -145,9 +161,9 @@ fn parse_files_info(value: &BencodeValue) -> Result<Vec<PathInfo>, String> {
                         Some(BencodeValue::List(p)) => p
                             .iter()
                             .map(|dir| match dir {
-                                BencodeValue::String(dir) => Ok(PathBuf::from(
-                                    String::from_utf8_lossy(dir.as_slice()).to_string(),
-                                )),
+                                BencodeValue::String(dir) => {
+                                    Ok(PathBuf::from(String::from_utf8_lossy(dir).to_string()))
+                                }
                                 _ => Err("'path' item is not a string".into()),
                             })
                             .collect::<Result<PathBuf, String>>()?,
@@ -159,8 +175,12 @@ fn parse_files_info(value: &BencodeValue) -> Result<Vec<PathInfo>, String> {
                             _ => return Err("'length' missing".into()),
                         },
                         path,
-                        // TODO
-                        md5_sum: None,
+                        md5_sum: match d.get("md5_sum") {
+                            Some(BencodeValue::String(s)) => {
+                                Some(String::from_utf8_lossy(s).to_string())
+                            }
+                            _ => None,
+                        },
                     })
                 }
                 _ => Err("'files' item is not a dict".into()),
