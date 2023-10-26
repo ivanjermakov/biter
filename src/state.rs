@@ -6,13 +6,14 @@ use rand::{seq::IteratorRandom, thread_rng};
 use crate::{
     hex::hex,
     metainfo::{Info, Metainfo},
-    types::ByteString,
+    types::ByteString, config::Config,
 };
 
 pub const BLOCK_SIZE: u32 = 1 << 14;
 
 #[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
 pub struct State {
+    pub config: Config,
     pub metainfo: Metainfo,
     pub tracker_timeout: Duration,
     pub info_hash: Vec<u8>,

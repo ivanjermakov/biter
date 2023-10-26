@@ -1,7 +1,6 @@
 use anyhow::{ensure, Context, Error, Result};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{
@@ -14,6 +13,7 @@ use tokio::{
 };
 
 use crate::{
+    abort::EnsureAbort,
     hex::hex,
     sha1,
     state::{Block, Peer, PeerInfo, PeerStatus, State, TorrentStatus, BLOCK_SIZE},
@@ -152,14 +152,18 @@ pub fn generate_peer_id() -> ByteString {
     ["-ER0000-".as_bytes(), &rand].concat()
 }
 
-pub async fn handshake(
-    peer: &PeerInfo,
-    info_hash: &ByteString,
-    peer_id: &ByteString,
-) -> Result<TcpStream> {
+pub async fn handshake(peer: &PeerInfo, state: Arc<Mutex<State>>) -> Result<TcpStream> {
+    let (info_hash, peer_id, peer_connect_timeout) = {
+        let state = state.lock().await;
+        (
+            state.info_hash.clone(),
+            state.peer_id.clone(),
+            state.config.peer_connect_timeout,
+        )
+    };
     debug!("connecting to peer {peer:?}");
     let mut stream = timeout(
-        Duration::from_secs(4),
+        peer_connect_timeout,
         TcpStream::connect(format!("{}:{}", peer.ip, peer.port)),
     )
     .await??;
@@ -273,6 +277,7 @@ pub async fn send_message(stream: &mut OwnedWriteHalf, message: Message) -> Resu
 }
 
 pub async fn peer_loop(state: Arc<Mutex<State>>) -> Result<()> {
+    let config = state.lock().await.config.clone();
     let mut handles = vec![];
     loop {
         debug!("reconnecting peers");
@@ -300,19 +305,18 @@ pub async fn peer_loop(state: Arc<Mutex<State>>) -> Result<()> {
                     if state.lock().await.status == TorrentStatus::Downloaded {
                         return;
                     }
-                    sleep(Duration::from_millis(1000)).await
+                    sleep(config.downloaded_check_wait).await
                 }
             } => {
                 // this is important to ensure that no tasks hold Arc<State> reference
                 trace!("closing {} peer connections", handles.len());
                 for h in handles {
-                    h.abort();
-                    let _ = h.await;
+                    let _ = h.ensure_abort().await;
                 }
                 trace!("peer connections closed");
                 return Ok(())
             },
-            _ = sleep(Duration::from_secs(10)) => ()
+            _ = sleep(config.reconnect_wait) => ()
         );
     }
 }
@@ -353,11 +357,7 @@ pub async fn handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()>
 }
 
 pub async fn do_handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()> {
-    let (info_hash, peer_id) = {
-        let state = state.lock().await;
-        (state.info_hash.clone(), state.peer_id.clone())
-    };
-    let stream = handshake(&peer, &info_hash, &peer_id)
+    let stream = handshake(&peer, state.clone())
         .await
         .context("handshake error")?;
     info!("successfull handshake with peer {:?}", peer);
@@ -391,15 +391,16 @@ pub async fn write_loop(
     state: Arc<Mutex<State>>,
 ) -> Result<()> {
     loop {
-        // TODO: make configurable
-        let respect_choke = true;
-        if respect_choke {
-            let p = state.lock().await.peers.get(&peer.peer_id).cloned();
-            if let Some(p) = p {
-                if p.choked {
-                    info!("peer is choked, waiting");
-                    sleep(Duration::from_millis(1000)).await;
-                    continue;
+        {
+            let state = state.lock().await;
+            if state.config.respect_choke {
+                let p = state.peers.get(&peer.peer_id).cloned();
+                if let Some(p) = p {
+                    if p.choked {
+                        info!("peer is choked, waiting");
+                        sleep(state.config.choke_wait).await;
+                        continue;
+                    }
                 }
             }
         }
@@ -427,7 +428,7 @@ pub async fn write_loop(
             };
             send_message(&mut stream, request_msg).await?;
         }
-        sleep(Duration::from_millis(100)).await;
+        sleep(state.lock().await.config.piece_request_wait).await;
     }
 }
 

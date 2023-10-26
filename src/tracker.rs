@@ -33,14 +33,14 @@ impl TrackerRequest {
     pub fn new(
         info_hash: ByteString,
         peer_id: ByteString,
+        port: u16,
         event: Option<TrackerEvent>,
         tracker_id: Option<ByteString>,
     ) -> TrackerRequest {
         TrackerRequest {
             info_hash,
             peer_id,
-            // TODO: should be configurable
-            port: 6881,
+            port: port as i64,
             // TODO
             uploaded: 0,
             // TODO
@@ -224,7 +224,13 @@ pub async fn tracker_loop(state: Arc<Mutex<State>>) {
         // TODO: include tracker id
         let tracker_response = tracker_request(
             announce,
-            TrackerRequest::new(info_hash, peer_id, None, None),
+            TrackerRequest::new(
+                info_hash,
+                peer_id,
+                state.lock().await.config.port,
+                None,
+                None,
+            ),
         )
         .await
         .context("request failed");

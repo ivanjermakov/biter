@@ -2,11 +2,13 @@
 extern crate log;
 
 use anyhow::{Error, Result};
-use std::{env, path::PathBuf, process};
+use std::{env, path::PathBuf, process, time::Duration};
 
-use crate::{peer::generate_peer_id, torrent::download_torrent};
+use crate::{config::Config, peer::generate_peer_id, torrent::download_torrent};
 
+mod abort;
 mod bencode;
+mod config;
 mod hex;
 mod metainfo;
 mod peer;
@@ -15,7 +17,6 @@ mod state;
 mod torrent;
 mod tracker;
 mod types;
-mod abort;
 
 #[tokio::main]
 async fn main() {
@@ -38,5 +39,15 @@ async fn try_main() -> Result<()> {
     let peer_id = generate_peer_id();
     info!("peer id {}", String::from_utf8_lossy(peer_id.as_slice()));
 
-    download_torrent(&path, &peer_id).await
+    let config = Config {
+        port: 6881,
+        respect_choke: true,
+        choke_wait: Duration::from_millis(100),
+        reconnect_wait: Duration::from_secs(10),
+        downloaded_check_wait: Duration::from_secs(1),
+        peer_connect_timeout: Duration::from_secs(4),
+        piece_request_wait: Duration::from_millis(100),
+    };
+
+    download_torrent(&path, &peer_id, &config).await
 }

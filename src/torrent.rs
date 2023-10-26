@@ -6,6 +6,7 @@ use std::{fs, path::PathBuf, sync::Arc};
 use tokio::{spawn, sync::Mutex};
 
 use crate::abort::EnsureAbort;
+use crate::config::Config;
 use crate::{
     bencode::{parse_bencoded, BencodeValue},
     metainfo::{FileInfo, Metainfo, PathInfo},
@@ -16,7 +17,7 @@ use crate::{
     types::ByteString,
 };
 
-pub async fn download_torrent(path: &Path, peer_id: &ByteString) -> Result<()> {
+pub async fn download_torrent(path: &Path, peer_id: &ByteString, config: &Config) -> Result<()> {
     debug!("reading torrent file: {:?}", path);
     let bencoded = fs::read(path).context("no metadata file")?;
     let metainfo_dict = match parse_bencoded(bencoded) {
@@ -39,6 +40,7 @@ pub async fn download_torrent(path: &Path, peer_id: &ByteString) -> Result<()> {
         TrackerRequest::new(
             info_hash.clone(),
             peer_id.to_vec(),
+            config.port,
             Some(TrackerEvent::Started),
             None,
         ),
@@ -53,6 +55,7 @@ pub async fn download_torrent(path: &Path, peer_id: &ByteString) -> Result<()> {
     };
 
     let state = Arc::new(Mutex::new(State {
+        config: config.clone(),
         metainfo: metainfo.clone(),
         tracker_timeout: Duration::from_secs(resp.interval as u64),
         info_hash,
