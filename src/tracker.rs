@@ -1,5 +1,5 @@
 use core::fmt;
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Error, Result};
 use reqwest::Client;
@@ -172,8 +172,7 @@ impl TryFrom<BencodeValue> for TrackerResponse {
     }
 }
 
-#[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
 pub struct TrackerResponseSuccess {
     pub peers: Vec<PeerInfo>,
     pub interval: i64,
@@ -218,19 +217,16 @@ pub async fn tracker_loop(state: Arc<Mutex<State>>) {
                 state.metainfo.announce.clone(),
                 state.info_hash.clone(),
                 state.peer_id.clone(),
-                state.tracker_timeout,
+                state.tracker_response.interval,
             )
         };
-        // TODO: include tracker id
+        let (port, tracker_id) = {
+            let state = state.lock().await;
+            (state.config.port, state.tracker_response.tracker_id.clone())
+        };
         let tracker_response = tracker_request(
             announce,
-            TrackerRequest::new(
-                info_hash,
-                peer_id,
-                state.lock().await.config.port,
-                None,
-                None,
-            ),
+            TrackerRequest::new(info_hash, peer_id, port, None, tracker_id),
         )
         .await
         .context("request failed");
@@ -269,6 +265,6 @@ pub async fn tracker_loop(state: Arc<Mutex<State>>) {
         };
 
         debug!("tracker timeout is {:?}", tracker_timeout);
-        sleep(tracker_timeout).await;
+        sleep(Duration::from_secs(tracker_timeout as u64)).await;
     }
 }

@@ -1,7 +1,6 @@
 use anyhow::{anyhow, ensure, Context, Error, Result};
 use futures::future;
 use std::path::Path;
-use std::time::Duration;
 use std::{fs, path::PathBuf, sync::Arc};
 use tokio::{spawn, sync::Mutex};
 
@@ -57,7 +56,7 @@ pub async fn download_torrent(path: &Path, peer_id: &ByteString, config: &Config
     let state = Arc::new(Mutex::new(State {
         config: config.clone(),
         metainfo: metainfo.clone(),
-        tracker_timeout: Duration::from_secs(resp.interval as u64),
+        tracker_response: resp.clone(),
         info_hash,
         peer_id: peer_id.to_vec(),
         pieces: init_pieces(&metainfo.info),

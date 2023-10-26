@@ -1,12 +1,14 @@
 use core::fmt;
-use std::{collections::BTreeMap, time::Duration};
+use std::collections::BTreeMap;
 
 use rand::{seq::IteratorRandom, thread_rng};
 
 use crate::{
+    config::Config,
     hex::hex,
     metainfo::{Info, Metainfo},
-    types::ByteString, config::Config,
+    tracker::TrackerResponseSuccess,
+    types::ByteString,
 };
 
 pub const BLOCK_SIZE: u32 = 1 << 14;
@@ -15,7 +17,7 @@ pub const BLOCK_SIZE: u32 = 1 << 14;
 pub struct State {
     pub config: Config,
     pub metainfo: Metainfo,
-    pub tracker_timeout: Duration,
+    pub tracker_response: TrackerResponseSuccess,
     pub info_hash: Vec<u8>,
     pub peer_id: Vec<u8>,
     pub pieces: BTreeMap<u32, Piece>,
