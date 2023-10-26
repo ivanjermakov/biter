@@ -95,8 +95,12 @@ impl TryFrom<BencodeValue> for Metainfo {
                         Some(BencodeValue::Int(v)) => *v,
                         _ => return Err("'length' missing".into()),
                     },
-                    // TODO
-                    md5_sum: None,
+                    md5_sum: match info_dict.get("md5_sum") {
+                        Some(BencodeValue::String(s)) => {
+                            Some(String::from_utf8_lossy(s).to_string())
+                        }
+                        _ => None,
+                    },
                 }
             }
         };
