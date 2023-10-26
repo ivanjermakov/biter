@@ -428,7 +428,9 @@ pub async fn write_loop(
             };
             send_message(&mut stream, request_msg).await?;
         }
-        sleep(state.lock().await.config.piece_request_wait).await;
+
+        let wait = state.lock().await.config.piece_request_wait;
+        sleep(wait).await;
     }
 }
 
