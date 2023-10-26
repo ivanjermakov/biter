@@ -218,7 +218,7 @@ pub async fn tracker_loop(state: Arc<Mutex<State>>) {
                 state.metainfo.announce.clone(),
                 state.info_hash.clone(),
                 state.peer_id.clone(),
-                state.tracker_timeout.clone(),
+                state.tracker_timeout,
             )
         };
         // TODO: include tracker id
@@ -237,7 +237,7 @@ pub async fn tracker_loop(state: Arc<Mutex<State>>) {
                 let new_peers: Vec<_> = resp
                     .peers
                     .into_iter()
-                    .filter(|p| state.peers.contains_key(&p.peer_id))
+                    .filter(|p| !state.peers.contains_key(&p.peer_id))
                     .map(Peer::new)
                     .collect();
                 info!("received {} new peers", new_peers.len());
