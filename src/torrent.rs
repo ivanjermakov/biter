@@ -7,6 +7,7 @@ use tokio::{spawn, sync::Mutex};
 
 use crate::abort::EnsureAbort;
 use crate::config::Config;
+use crate::state::PeerInfo;
 use crate::{
     bencode::{parse_bencoded, BencodeValue},
     metainfo::{FileInfo, Metainfo, PathInfo},
@@ -92,6 +93,17 @@ pub async fn download_torrent(path: &Path, peer_id: &ByteString, config: &Config
         state.pieces.values().all(|p| p.completed),
         "incomplete pieces"
     );
+
+    let dht_peers: Vec<PeerInfo> = state
+        .peers
+        .values()
+        .filter(|p| p.dht_port.is_some())
+        .map(|p| PeerInfo {
+            ip: p.info.ip.clone(),
+            port: p.dht_port.unwrap(),
+        })
+        .collect();
+    debug!("discovered {} dht peers: {:?}", dht_peers.len(), dht_peers);
 
     info!("writing files to disk");
     write_to_disk(state).await?;

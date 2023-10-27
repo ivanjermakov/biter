@@ -129,7 +129,7 @@ impl TryFrom<BencodeValue> for TrackerResponse {
                             _ => return Err("'ip' missing".into()),
                         },
                         port: match p_dict.get("port") {
-                            Some(BencodeValue::Int(p)) => *p,
+                            Some(BencodeValue::Int(p)) => *p as u16,
                             _ => return Err("'port' missing".into()),
                         },
                     }),

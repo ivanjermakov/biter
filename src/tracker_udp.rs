@@ -101,7 +101,7 @@ pub async fn tracker_request_udp(
                 .map(|b| b.to_string())
                 .collect::<Vec<_>>()
                 .join("."),
-            port: u16::from_be_bytes(pkg[i + 4..i + 6].try_into().unwrap()) as i64,
+            port: u16::from_be_bytes(pkg[i + 4..i + 6].try_into().unwrap()),
         })
         .collect();
 

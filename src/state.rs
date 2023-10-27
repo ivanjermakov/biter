@@ -91,6 +91,7 @@ pub struct Peer {
     pub choked: bool,
     pub interested: bool,
     pub bitfield: Option<Vec<u8>>,
+    pub dht_port: Option<u16>
 }
 
 impl Peer {
@@ -103,6 +104,7 @@ impl Peer {
             choked: true,
             interested: false,
             bitfield: None,
+            dht_port: None
         }
     }
 }
@@ -117,7 +119,7 @@ pub enum PeerStatus {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PeerInfo {
     pub ip: String,
-    pub port: i64,
+    pub port: u16,
 }
 
 pub fn init_pieces(info: &Info) -> BTreeMap<u32, Piece> {

@@ -53,7 +53,7 @@ pub enum Message {
         length: u32,
     },
     Port {
-        port: u8,
+        port: u16,
     },
 }
 
@@ -66,8 +66,10 @@ impl From<Message> for Vec<u8> {
             Message::Handshake { info_hash, peer_id } => {
                 let pstr = "BitTorrent protocol";
                 let pstrlen = &[pstr.len() as u8];
-                let reserved = &[0u8; 8];
-                [pstrlen, pstr.as_bytes(), reserved, &info_hash, &peer_id].concat()
+                let mut reserved = [0u8; 8];
+                // DHT protocol support, 63rd feature bit
+                reserved[7] |= 1;
+                [pstrlen, pstr.as_bytes(), &reserved, &info_hash, &peer_id].concat()
             }
             Message::KeepAlive => [u32tb(0).as_slice()].concat(),
             Message::Choke => [u32tb(1).as_slice(), &[0]].concat(),
@@ -116,7 +118,7 @@ impl From<Message> for Vec<u8> {
                 &u32tb(length),
             ]
             .concat(),
-            Message::Port { port } => [u32tb(3).as_slice(), &[9], &[port]].concat(),
+            Message::Port { port } => [u32tb(3).as_slice(), &[9], &port.to_be_bytes()].concat(),
         }
     }
 }
@@ -252,7 +254,9 @@ pub async fn read_message(stream: &mut OwnedReadHalf) -> Result<Message> {
                     begin: u32_from_slice(&payload_p[4..8])?,
                     length: u32_from_slice(&payload_p[8..12])?,
                 }),
-                9 if len == 3 => Ok(Message::Port { port: payload_p[0] }),
+                9 if len == 3 => Ok(Message::Port {
+                    port: u16::from_be_bytes(payload_p[0..2].try_into()?),
+                }),
                 _ => Err(Error::msg(format!(
                     "unexpected message: {}",
                     hex(&[len_p.as_ref(), &id_p, payload_p.as_slice()].concat())
@@ -500,6 +504,13 @@ async fn read_loop(
                     );
                 }
             }
+            Ok(Message::Port { port }) => match state.lock().await.peers.get_mut(&peer) {
+                Some(p) => {
+                    debug!("received port {}", port);
+                    p.dht_port = Some(port)
+                }
+                _ => debug!("no peer {:?}", peer),
+            },
             Ok(msg) => {
                 debug!("no handler for message, skipping: {:?}", msg);
             }

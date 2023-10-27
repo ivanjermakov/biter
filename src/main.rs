@@ -16,6 +16,7 @@ mod sha1;
 mod state;
 mod torrent;
 mod tracker;
+mod tracker_udp;
 mod types;
 mod udp;
 
