@@ -417,8 +417,10 @@ pub async fn write_loop(
         debug!("next request piece: {:?}", piece);
         let total_blocks = piece.total_blocks();
 
-        // TODO: only request blocks you don't have
-        for i in 0..total_blocks {
+        let block_idxs = (0..total_blocks)
+            .filter(|i| !piece.blocks.contains_key(i))
+            .collect::<Vec<_>>();
+        for i in block_idxs {
             let request_msg = Message::Request {
                 piece_index: piece.index,
                 begin: i * BLOCK_SIZE,
