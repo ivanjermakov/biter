@@ -1,13 +1,13 @@
 use anyhow::{ensure, Result};
 use rand::{thread_rng, Rng};
 use reqwest::Url;
-use tokio::net::UdpSocket;
 
 use crate::{
     hex::hex,
     peer::generate_peer_id,
     state::PeerInfo,
     tracker::{TrackerEvent, TrackerRequest, TrackerResponse, TrackerResponseSuccess},
+    udp::send_udp,
 };
 
 pub async fn tracker_request_udp(
@@ -24,12 +24,6 @@ pub async fn tracker_request_udp(
         url.host().expect("no host"),
         url.port().expect("no port")
     );
-    let local_addr = "0.0.0.0:0";
-    trace!("creating socket at {}", local_addr);
-    let socket = UdpSocket::bind(local_addr).await?;
-    trace!("connecting to {}", tracker_addr);
-    socket.connect(tracker_addr).await?;
-    trace!("connected");
 
     let conn_id: i64 = 0x41727101980;
     let tx_id: i32 = thread_rng().gen();
@@ -40,12 +34,7 @@ pub async fn tracker_request_udp(
     ]
     .concat();
     trace!("sending connect pkg: {}", hex(&connect_pkg));
-    socket.send(&connect_pkg).await?;
-
-    trace!("reading connect pkg");
-    let mut buf = [0u8; 1 << 16];
-    let n = socket.recv(&mut buf).await?;
-    let pkg = buf[0..n].to_vec();
+    let pkg = send_udp(&tracker_addr, &connect_pkg).await?.0;
     trace!("read connect pkg: {}", hex(&pkg));
     ensure!(pkg.len() >= 16, "connect packet too short");
     let conn_id = {
@@ -90,15 +79,10 @@ pub async fn tracker_request_udp(
         format!("announce pkg is incorrect size: {}", announce_pkg.len())
     );
     trace!("sending announce pkg: {}", hex(&connect_pkg));
-    socket.send(&announce_pkg).await?;
-
-    trace!("reading announce pkg");
-    let (n, addr) = socket.recv_from(&mut buf).await?;
+    let (pkg, addr) = send_udp(&tracker_addr, &announce_pkg).await?;
     if addr.is_ipv6() {
         todo!("ipv6 tracker response");
     }
-    let pkg = buf[0..n].to_vec();
-    trace!("read announce pkg: {}", hex(&pkg));
     ensure!(pkg.len() >= 20, "announce packet too short");
     ensure!((pkg.len() - 20) % 6 == 0, "announce packet wierd size");
     ensure!(

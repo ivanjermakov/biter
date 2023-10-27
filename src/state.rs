@@ -139,7 +139,9 @@ impl fmt::Debug for PeerInfo {
 
 pub fn init_pieces(info: &Info) -> BTreeMap<u32, Piece> {
     let total_len = info.file_info.total_length() as u32;
-    assert!(info.pieces.len() == (total_len as f64 / info.piece_length as f64).ceil() as usize);
+    if info.pieces.len() != (total_len as f64 / info.piece_length as f64).ceil() as usize {
+        warn!("total length/piece size/piece count inconsistent");
+    }
     info.pieces
         .iter()
         .cloned()

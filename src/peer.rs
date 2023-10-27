@@ -416,6 +416,7 @@ pub async fn write_loop(
         debug!("next request piece: {:?}", piece);
         let total_blocks = piece.total_blocks();
 
+        // TODO: only request blocks you don't have
         for i in 0..total_blocks {
             let request_msg = Message::Request {
                 piece_index: piece.index,

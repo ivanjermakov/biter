@@ -17,6 +17,7 @@ mod state;
 mod torrent;
 mod tracker;
 mod types;
+mod udp;
 
 #[tokio::main]
 async fn main() {
