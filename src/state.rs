@@ -2,6 +2,7 @@ use core::fmt;
 use std::collections::BTreeMap;
 
 use rand::{seq::IteratorRandom, thread_rng};
+use serde::{Serialize, Deserialize};
 
 use crate::{
     config::Config,
@@ -116,7 +117,7 @@ pub enum PeerStatus {
     Done,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PeerInfo {
     pub ip: String,
     pub port: u16,

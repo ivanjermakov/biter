@@ -2,16 +2,22 @@
 extern crate log;
 
 use anyhow::{Error, Result};
-use std::{env, path::PathBuf, process, time::Duration};
+use expanduser::expanduser;
+use std::{env, path::PathBuf, process, sync::Arc, time::Duration};
+use tokio::sync::Mutex;
 
-use crate::{config::Config, peer::generate_peer_id, torrent::download_torrent};
+use crate::{
+    config::Config, peer::generate_peer_id, persist::PersistState, torrent::download_torrent,
+};
 
 mod abort;
 mod bencode;
 mod config;
+mod dht;
 mod hex;
 mod metainfo;
 mod peer;
+mod persist;
 mod sha1;
 mod state;
 mod torrent;
@@ -43,7 +49,7 @@ async fn try_main() -> Result<()> {
 
     let config = Config {
         port: 6881,
-        respect_choke: true,
+        respect_choke: false,
         choke_wait: Duration::from_millis(100),
         reconnect_wait: Duration::from_secs(10),
         downloaded_check_wait: Duration::from_secs(1),
@@ -51,5 +57,17 @@ async fn try_main() -> Result<()> {
         piece_request_wait: Duration::from_millis(100),
     };
 
-    download_torrent(&path, &peer_id, &config).await
+    let state_path = expanduser("~/.local/state/biter")?;
+    let p_state = PersistState::load(&state_path)
+        .ok()
+        .unwrap_or_else(|| PersistState {
+            path: state_path,
+            dht_peers: vec![],
+        });
+    debug!("read persist state from file: {:?}", p_state);
+    let p_state = Arc::new(Mutex::new(p_state));
+
+    download_torrent(&path, &peer_id, &config, p_state).await?;
+
+    Ok(())
 }

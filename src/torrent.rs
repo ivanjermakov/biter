@@ -7,6 +7,7 @@ use tokio::{spawn, sync::Mutex};
 
 use crate::abort::EnsureAbort;
 use crate::config::Config;
+use crate::persist::PersistState;
 use crate::state::PeerInfo;
 use crate::{
     bencode::{parse_bencoded, BencodeValue},
@@ -18,7 +19,12 @@ use crate::{
     types::ByteString,
 };
 
-pub async fn download_torrent(path: &Path, peer_id: &ByteString, config: &Config) -> Result<()> {
+pub async fn download_torrent(
+    path: &Path,
+    peer_id: &ByteString,
+    config: &Config,
+    p_state: Arc<Mutex<PersistState>>,
+) -> Result<()> {
     let started = Instant::now();
     debug!("reading torrent file: {:?}", path);
     let bencoded = fs::read(path).context("no metadata file")?;
@@ -94,7 +100,7 @@ pub async fn download_torrent(path: &Path, peer_id: &ByteString, config: &Config
         "incomplete pieces"
     );
 
-    let dht_peers: Vec<PeerInfo> = state
+    let mut dht_peers: Vec<PeerInfo> = state
         .peers
         .values()
         .filter(|p| p.dht_port.is_some())
@@ -104,6 +110,7 @@ pub async fn download_torrent(path: &Path, peer_id: &ByteString, config: &Config
         })
         .collect();
     debug!("discovered {} dht peers: {:?}", dht_peers.len(), dht_peers);
+    p_state.lock().await.dht_peers.append(&mut dht_peers);
 
     info!("writing files to disk");
     write_to_disk(state).await?;
