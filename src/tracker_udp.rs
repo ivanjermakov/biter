@@ -4,7 +4,6 @@ use reqwest::Url;
 
 use crate::{
     hex::hex,
-    peer::generate_peer_id,
     state::PeerInfo,
     tracker::{TrackerEvent, TrackerRequest, TrackerResponse, TrackerResponseSuccess},
     udp::send_udp,
@@ -97,10 +96,6 @@ pub async fn tracker_request_udp(
     let peers = (0..addr_count)
         .map(|i| 20 + 6 * i)
         .map(|i| PeerInfo {
-            // since peer_id is important for peer identification, generate a random unique id
-            // TODO: this causes peers to duplicate in state.peers
-            // dedup peers based on addr/port pair instead of relying on unique id
-            peer_id: generate_peer_id(),
             ip: pkg[i..i + 4]
                 .iter()
                 .map(|b| b.to_string())

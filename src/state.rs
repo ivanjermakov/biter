@@ -21,7 +21,7 @@ pub struct State {
     pub info_hash: Vec<u8>,
     pub peer_id: Vec<u8>,
     pub pieces: BTreeMap<u32, Piece>,
-    pub peers: BTreeMap<ByteString, Peer>,
+    pub peers: BTreeMap<PeerInfo, Peer>,
     pub status: TorrentStatus,
 }
 
@@ -114,27 +114,10 @@ pub enum PeerStatus {
     Done,
 }
 
-#[derive(Clone, PartialEq, PartialOrd, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PeerInfo {
-    pub peer_id: ByteString,
     pub ip: String,
     pub port: i64,
-}
-
-impl fmt::Debug for PeerInfo {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        f.debug_struct("TrackerPeer")
-            .field(
-                "peer_id",
-                &match String::from_utf8(self.peer_id.clone()) {
-                    Ok(str) => str,
-                    _ => "<non-utf>".into(),
-                },
-            )
-            .field("ip", &self.ip)
-            .field("port", &self.port)
-            .finish()
-    }
 }
 
 pub fn init_pieces(info: &Info) -> BTreeMap<u32, Piece> {

@@ -122,10 +122,6 @@ impl TryFrom<BencodeValue> for TrackerResponse {
                 .iter()
                 .map(|p| match p {
                     BencodeValue::Dict(p_dict) => Ok(PeerInfo {
-                        peer_id: match p_dict.get("peer id") {
-                            Some(BencodeValue::String(v)) => v.clone(),
-                            _ => return Err("'peer id' missing".into()),
-                        },
                         ip: match p_dict.get("ip") {
                             Some(BencodeValue::String(i)) => {
                                 String::from_utf8(i.clone()).map_err(|e| e.to_string())?
@@ -256,12 +252,12 @@ pub async fn tracker_loop(state: Arc<Mutex<State>>) {
                 let new_peers: Vec<_> = resp
                     .peers
                     .into_iter()
-                    .filter(|p| !state.peers.contains_key(&p.peer_id))
+                    .filter(|p| !state.peers.contains_key(p))
                     .map(Peer::new)
                     .collect();
                 info!("received {} new peers", new_peers.len());
                 for p in new_peers {
-                    state.peers.insert(p.info.peer_id.clone(), p);
+                    state.peers.insert(p.info.clone(), p);
                 }
                 info!(
                     "total {} peers, {} connected",

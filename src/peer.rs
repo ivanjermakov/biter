@@ -187,15 +187,12 @@ pub async fn handshake(peer: &PeerInfo, state: Arc<Mutex<State>>) -> Result<TcpS
     debug!("peer response: {}", hex(&msg));
     if let Message::Handshake {
         info_hash: h_info_hash,
-        peer_id: h_peer_id,
+        ..
     } = Message::try_from(msg)
         .map_err(Error::msg)
         .context("handshake parse error")?
     {
         ensure!(h_info_hash == *info_hash, "response `info_hash` differ");
-        if h_peer_id != peer.peer_id {
-            debug!("peer id differ")
-        }
         Ok(stream)
     } else {
         Err(Error::msg("unexpected message"))
@@ -325,7 +322,7 @@ pub async fn handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()>
     {
         debug!("connecting to peer: {:?}", peer);
         let mut state = state.lock().await;
-        match state.peers.get_mut(&peer.peer_id) {
+        match state.peers.get_mut(&peer) {
             Some(p) if p.status == PeerStatus::Connected => {
                 return Err(Error::msg("peer is already connected"))
             }
@@ -333,7 +330,7 @@ pub async fn handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()>
             None => {
                 let mut p = Peer::new(peer.clone());
                 p.status = PeerStatus::Connected;
-                state.peers.insert(peer.peer_id.clone(), p);
+                state.peers.insert(peer.clone(), p);
             }
         };
     };
@@ -345,7 +342,7 @@ pub async fn handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()>
         .lock()
         .await
         .peers
-        .get_mut(&peer.peer_id)
+        .get_mut(&peer)
         .context("no peer")?
         .status = if res.is_err() {
         PeerStatus::Disconnected
@@ -362,7 +359,7 @@ pub async fn do_handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<
         .context("handshake error")?;
     info!("successfull handshake with peer {:?}", peer);
 
-    if let Some(p) = state.lock().await.peers.get_mut(&peer.peer_id) {
+    if let Some(p) = state.lock().await.peers.get_mut(&peer) {
         p.status = PeerStatus::Connected;
     }
 
@@ -394,7 +391,7 @@ pub async fn write_loop(
         {
             let state = state.lock().await;
             if state.config.respect_choke {
-                let p = state.peers.get(&peer.peer_id).cloned();
+                let p = state.peers.get(&peer).cloned();
                 if let Some(p) = p {
                     if p.choked {
                         info!("peer is choked, waiting");
@@ -442,13 +439,13 @@ async fn read_loop(
 ) -> Result<()> {
     loop {
         match read_message(&mut stream).await {
-            Ok(Message::Choke) => match state.lock().await.peers.get_mut(&peer.peer_id) {
+            Ok(Message::Choke) => match state.lock().await.peers.get_mut(&peer) {
                 Some(p) => p.choked = true,
-                _ => debug!("no peer with id {:?}", peer.peer_id),
+                _ => debug!("no peer {:?}", peer),
             },
-            Ok(Message::Unchoke) => match state.lock().await.peers.get_mut(&peer.peer_id) {
+            Ok(Message::Unchoke) => match state.lock().await.peers.get_mut(&peer) {
                 Some(p) => p.choked = false,
-                _ => debug!("no peer with id {:?}", peer.peer_id),
+                _ => debug!("no peer {:?}", peer),
             },
             Ok(Message::Piece {
                 piece_index,

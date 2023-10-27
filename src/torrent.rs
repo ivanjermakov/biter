@@ -65,7 +65,7 @@ pub async fn download_torrent(path: &Path, peer_id: &ByteString, config: &Config
         peers: resp
             .peers
             .into_iter()
-            .map(|p| (p.peer_id.clone(), Peer::new(p)))
+            .map(|p| (p.clone(), Peer::new(p)))
             .collect(),
         status: TorrentStatus::Started,
     }));
