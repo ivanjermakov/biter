@@ -16,12 +16,10 @@ use crate::{
     sha1,
     state::{init_pieces, Peer, State, TorrentStatus},
     tracker::{tracker_loop, tracker_request, TrackerEvent, TrackerRequest, TrackerResponse},
-    types::ByteString,
 };
 
 pub async fn download_torrent(
     path: &Path,
-    peer_id: &ByteString,
     config: &Config,
     p_state: Arc<Mutex<PersistState>>,
 ) -> Result<()> {
@@ -47,7 +45,7 @@ pub async fn download_torrent(
         metainfo.announce.clone(),
         TrackerRequest::new(
             info_hash.clone(),
-            peer_id.to_vec(),
+            p_state.lock().await.peer_id.to_vec(),
             config.port,
             Some(TrackerEvent::Started),
             None,
@@ -67,7 +65,7 @@ pub async fn download_torrent(
         metainfo: metainfo.clone(),
         tracker_response: resp.clone(),
         info_hash,
-        peer_id: peer_id.to_vec(),
+        peer_id: p_state.lock().await.peer_id.to_vec(),
         pieces: init_pieces(&metainfo.info),
         peers: resp
             .peers

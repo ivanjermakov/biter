@@ -44,9 +44,6 @@ async fn try_main() -> Result<()> {
         _ => return Err(Error::msg("no torrent file specified")),
     };
 
-    let peer_id = generate_peer_id();
-    info!("peer id {}", String::from_utf8_lossy(peer_id.as_slice()));
-
     let config = Config {
         port: 6881,
         respect_choke: false,
@@ -62,12 +59,13 @@ async fn try_main() -> Result<()> {
         .ok()
         .unwrap_or_else(|| PersistState {
             path: state_path,
+            peer_id: generate_peer_id(),
             dht_peers: vec![],
         });
     debug!("read persist state from file: {:?}", p_state);
     let p_state = Arc::new(Mutex::new(p_state));
 
-    download_torrent(&path, &peer_id, &config, p_state).await?;
+    download_torrent(&path, &config, p_state).await?;
 
     Ok(())
 }

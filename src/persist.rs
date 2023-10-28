@@ -6,11 +6,12 @@ use std::{
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::state::PeerInfo;
+use crate::{state::PeerInfo, types::ByteString};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistState {
     pub path: PathBuf,
+    pub peer_id: ByteString,
     pub dht_peers: Vec<PeerInfo>,
 }
 
