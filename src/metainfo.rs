@@ -36,20 +36,15 @@ impl fmt::Debug for Info {
 
 #[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
 pub enum FileInfo {
-    Single {
-        length: i64,
-        md5_sum: Option<String>,
-    },
-    Multi {
-        files: Vec<PathInfo>,
-    },
+    Single(PathInfo),
+    Multi(Vec<PathInfo>),
 }
 
 impl FileInfo {
     pub fn total_length(&self) -> i64 {
         match self {
-            FileInfo::Single { length, .. } => *length,
-            FileInfo::Multi { files } => files.iter().map(|f| f.length).sum(),
+            FileInfo::Single(path) => path.length,
+            FileInfo::Multi(files) => files.iter().map(|f| f.length).sum(),
         }
     }
 }
@@ -77,15 +72,14 @@ impl TryFrom<BencodeValue> for Metainfo {
             Some(BencodeValue::String(s)) => s.chunks(20).map(|c| PieceHash(c.to_vec())).collect(),
             _ => return Err("'pieces' missing".into()),
         };
-        let name = match info_dict.get("name") {
+        let name: String = match info_dict.get("name") {
             Some(BencodeValue::String(s)) => String::from_utf8_lossy(s).into(),
             _ => return Err("'name' missing".into()),
         };
         let file_info = match info_dict.get("files") {
-            Some(d) => FileInfo::Multi {
-                files: parse_files_info(d)?,
-            },
-            None => FileInfo::Single {
+            Some(d) => FileInfo::Multi(parse_files_info(d)?),
+            None => FileInfo::Single(PathInfo {
+                path: PathBuf::from(&name),
                 length: match info_dict.get("length") {
                     Some(BencodeValue::Int(v)) => *v,
                     _ => return Err("'length' missing".into()),
@@ -94,7 +88,7 @@ impl TryFrom<BencodeValue> for Metainfo {
                     Some(BencodeValue::String(s)) => Some(String::from_utf8_lossy(s).to_string()),
                     _ => None,
                 },
-            },
+            }),
         };
         let metainfo = Metainfo {
             info: Info {

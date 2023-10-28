@@ -12,7 +12,7 @@ use crate::{
     bencode::{parse_bencoded, BencodeValue},
     config::Config,
     dht::find_peers,
-    metainfo::{FileInfo, Metainfo, PathInfo},
+    metainfo::{FileInfo, Metainfo},
     peer::peer_loop,
     persist::PersistState,
     sha1,
@@ -144,12 +144,8 @@ async fn write_to_disk(mut state: State) -> Result<()> {
         .collect();
 
     let files = match state.metainfo.info.file_info {
-        FileInfo::Single { length, md5_sum } => vec![PathInfo {
-            length,
-            path: PathBuf::from(&state.metainfo.info.name),
-            md5_sum,
-        }],
-        FileInfo::Multi { files } => files,
+        FileInfo::Single(file) => vec![file],
+        FileInfo::Multi(files) => files,
     };
 
     // TODO: check files md5_sum
