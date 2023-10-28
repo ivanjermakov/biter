@@ -1,5 +1,5 @@
 use core::fmt;
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use anyhow::{Context, Error, Result};
 use reqwest::Client;
@@ -169,9 +169,9 @@ impl TryFrom<BencodeValue> for TrackerResponse {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, PartialOrd, Hash)]
 pub struct TrackerResponseSuccess {
-    pub peers: Vec<PeerInfo>,
+    pub peers: BTreeSet<PeerInfo>,
     pub interval: i64,
     pub warning_message: Option<String>,
     pub min_interval: Option<i64>,

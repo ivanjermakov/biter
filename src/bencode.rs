@@ -64,6 +64,12 @@ impl fmt::Debug for BencodeValue {
     }
 }
 
+impl From<&str> for BencodeValue {
+    fn from(value: &str) -> Self {
+        BencodeValue::String(value.as_bytes().to_vec())
+    }
+}
+
 #[allow(dead_code)]
 pub fn bencode_string(value: ByteString) -> ByteString {
     vec![

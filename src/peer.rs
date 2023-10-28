@@ -164,11 +164,7 @@ pub async fn handshake(peer: &PeerInfo, state: Arc<Mutex<State>>) -> Result<TcpS
         )
     };
     debug!("connecting to peer {peer:?}");
-    let mut stream = timeout(
-        peer_connect_timeout,
-        TcpStream::connect(format!("{}:{}", peer.ip, peer.port)),
-    )
-    .await??;
+    let mut stream = timeout(peer_connect_timeout, TcpStream::connect(peer.to_addr())).await??;
     let handshake: Vec<u8> = Message::Handshake {
         info_hash: info_hash.clone(),
         peer_id: peer_id.clone(),

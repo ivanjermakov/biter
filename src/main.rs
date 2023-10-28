@@ -3,7 +3,7 @@ extern crate log;
 
 use anyhow::{Error, Result};
 use expanduser::expanduser;
-use std::{env, path::PathBuf, process, sync::Arc, time::Duration};
+use std::{collections::BTreeSet, env, path::PathBuf, process, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
 use crate::{
@@ -60,7 +60,7 @@ async fn try_main() -> Result<()> {
         .unwrap_or_else(|| PersistState {
             path: state_path,
             peer_id: generate_peer_id(),
-            dht_peers: vec![],
+            dht_peers: BTreeSet::new(),
         });
     debug!("read persist state from file: {:?}", p_state);
     let p_state = Arc::new(Mutex::new(p_state));

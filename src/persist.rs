@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
 };
@@ -12,7 +13,7 @@ use crate::{state::PeerInfo, types::ByteString};
 pub struct PersistState {
     pub path: PathBuf,
     pub peer_id: ByteString,
-    pub dht_peers: Vec<PeerInfo>,
+    pub dht_peers: BTreeSet<PeerInfo>,
 }
 
 impl PersistState {

@@ -95,15 +95,8 @@ pub async fn tracker_request_udp(
     let addr_count = (pkg.len() - 20) / 6;
     let peers = (0..addr_count)
         .map(|i| 20 + 6 * i)
-        .map(|i| PeerInfo {
-            ip: pkg[i..i + 4]
-                .iter()
-                .map(|b| b.to_string())
-                .collect::<Vec<_>>()
-                .join("."),
-            port: u16::from_be_bytes(pkg[i + 4..i + 6].try_into().unwrap()),
-        })
-        .collect();
+        .map(|i| PeerInfo::try_from(&pkg[i..i + 6]))
+        .collect::<Result<_, _>>()?;
 
     let resp = TrackerResponse::Success(TrackerResponseSuccess {
         peers,

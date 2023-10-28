@@ -1,8 +1,9 @@
 use core::fmt;
 use std::collections::BTreeMap;
 
+use anyhow::{ensure, Error};
 use rand::{seq::IteratorRandom, thread_rng};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     config::Config,
@@ -92,7 +93,7 @@ pub struct Peer {
     pub choked: bool,
     pub interested: bool,
     pub bitfield: Option<Vec<u8>>,
-    pub dht_port: Option<u16>
+    pub dht_port: Option<u16>,
 }
 
 impl Peer {
@@ -105,7 +106,7 @@ impl Peer {
             choked: true,
             interested: false,
             bitfield: None,
-            dht_port: None
+            dht_port: None,
         }
     }
 }
@@ -121,6 +122,28 @@ pub enum PeerStatus {
 pub struct PeerInfo {
     pub ip: String,
     pub port: u16,
+}
+
+impl PeerInfo {
+    pub fn to_addr(&self) -> String {
+        format!("{}:{}", self.ip, self.port)
+    }
+}
+
+impl TryFrom<&[u8]> for PeerInfo {
+    type Error = Error;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        ensure!(value.len() == 6, "expected 6 byte slice");
+        Ok(PeerInfo {
+            ip: value[0..4]
+                .iter()
+                .map(|b| b.to_string())
+                .collect::<Vec<_>>()
+                .join("."),
+            port: u16::from_be_bytes(value[4..6].try_into()?),
+        })
+    }
 }
 
 pub fn init_pieces(info: &Info) -> BTreeMap<u32, Piece> {

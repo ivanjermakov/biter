@@ -1,21 +1,26 @@
 use anyhow::{anyhow, ensure, Context, Error, Result};
 use futures::future;
+use futures::stream::FuturesUnordered;
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Instant;
 use std::{fs, path::PathBuf, sync::Arc};
 use tokio::{spawn, sync::Mutex};
 
-use crate::abort::EnsureAbort;
-use crate::config::Config;
-use crate::persist::PersistState;
-use crate::state::PeerInfo;
 use crate::{
+    abort::EnsureAbort,
     bencode::{parse_bencoded, BencodeValue},
+    config::Config,
+    dht::find_peers,
     metainfo::{FileInfo, Metainfo, PathInfo},
     peer::peer_loop,
+    persist::PersistState,
     sha1,
-    state::{init_pieces, Peer, State, TorrentStatus},
-    tracker::{tracker_loop, tracker_request, TrackerEvent, TrackerRequest, TrackerResponse},
+    state::{init_pieces, Peer, PeerInfo, State, TorrentStatus},
+    tracker::{
+        tracker_loop, tracker_request, TrackerEvent, TrackerRequest, TrackerResponse,
+        TrackerResponseSuccess,
+    },
 };
 
 pub async fn download_torrent(
@@ -41,6 +46,9 @@ pub async fn download_torrent(
         _ => unreachable!(),
     };
     let info_hash = sha1::encode(info_dict_str);
+
+    let peers = discover_peers(p_state.clone(), &info_hash).await?;
+
     let tracker_response = tracker_request(
         metainfo.announce.clone(),
         TrackerRequest::new(
@@ -52,12 +60,21 @@ pub async fn download_torrent(
         ),
     )
     .await
-    .context("request failed")?;
+    .context("request failed");
     info!("tracker response: {tracker_response:?}");
 
     let resp = match tracker_response {
-        TrackerResponse::Success(r) => r,
-        TrackerResponse::Failure { failure_reason } => return Err(Error::msg(failure_reason)),
+        Ok(TrackerResponse::Success(r)) => r,
+        e => {
+            debug!("tracker error: {:?}", e);
+            TrackerResponseSuccess {
+                // set peers discovered via DHT
+                peers,
+                // should never poll again, use rely on DHT
+                interval: i64::MAX,
+                ..Default::default()
+            }
+        }
     };
 
     let state = Arc::new(Mutex::new(State {
@@ -77,6 +94,7 @@ pub async fn download_torrent(
     trace!("init state: {:?}", state);
 
     let peer_loop_h = spawn(peer_loop(state.clone()));
+    // TODO: DHT discover loop
     let tracker_loop_h = spawn(tracker_loop(state.clone()));
     debug!("connecting to peers");
     peer_loop_h.await??;
@@ -98,7 +116,7 @@ pub async fn download_torrent(
         "incomplete pieces"
     );
 
-    let mut dht_peers: Vec<PeerInfo> = state
+    let mut dht_peers: BTreeSet<PeerInfo> = state
         .peers
         .values()
         .filter(|p| p.dht_port.is_some())
@@ -164,4 +182,39 @@ async fn write_file(path: PathBuf, data: Vec<u8>) -> Result<()> {
     }
     info!("file written ({} bytes): {:?}", data.len(), path);
     Ok::<(), Error>(())
+}
+
+async fn discover_peers(
+    p_state: Arc<Mutex<PersistState>>,
+    info_hash: &[u8],
+) -> Result<BTreeSet<PeerInfo>> {
+    let (dht_peers, peer_id) = {
+        let p_state = p_state.lock().await;
+        (p_state.dht_peers.clone(), p_state.peer_id.clone())
+    };
+    let mut peers = BTreeSet::new();
+    // TODO: make configurable
+    let min_p = 50;
+
+    let handles = dht_peers
+        .into_iter()
+        .map(|p| spawn(find_peers(p, peer_id.clone(), info_hash.to_vec(), min_p)))
+        .collect::<FuturesUnordered<_>>();
+    for h in handles {
+        match h.await {
+            Ok(Ok(ps)) => {
+                for p in ps {
+                    peers.insert(p);
+                }
+                if peers.len() >= min_p {
+                    break;
+                }
+            }
+            e => {
+                trace!("dht error: {:?}", e);
+            }
+        }
+    }
+    info!("discovered {} peers: {:?}", peers.len(), peers);
+    Ok(peers)
 }
