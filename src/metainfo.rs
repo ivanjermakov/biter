@@ -41,17 +41,24 @@ pub enum FileInfo {
 }
 
 impl FileInfo {
-    pub fn total_length(&self) -> i64 {
+    pub fn total_length(&self) -> u32 {
         match self {
             FileInfo::Single(path) => path.length,
             FileInfo::Multi(files) => files.iter().map(|f| f.length).sum(),
+        }
+    }
+
+    pub fn files(&self) -> Vec<&PathInfo> {
+        match self {
+            FileInfo::Single(path) => vec![path],
+            FileInfo::Multi(files) => files.iter().collect(),
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
 pub struct PathInfo {
-    pub length: i64,
+    pub length: u32,
     pub path: PathBuf,
     pub md5_sum: Option<String>,
 }
@@ -81,7 +88,7 @@ impl TryFrom<BencodeValue> for Metainfo {
             None => FileInfo::Single(PathInfo {
                 path: PathBuf::from(&name),
                 length: match info_dict.get("length") {
-                    Some(BencodeValue::Int(v)) => *v,
+                    Some(BencodeValue::Int(v)) => *v as u32,
                     _ => return Err("'length' missing".into()),
                 },
                 md5_sum: match info_dict.get("md5_sum") {
@@ -165,7 +172,7 @@ fn parse_files_info(value: &BencodeValue) -> Result<Vec<PathInfo>, String> {
                     };
                     Ok(PathInfo {
                         length: match d.get("length") {
-                            Some(BencodeValue::Int(v)) => *v,
+                            Some(BencodeValue::Int(v)) => *v as u32,
                             _ => return Err("'length' missing".into()),
                         },
                         path,

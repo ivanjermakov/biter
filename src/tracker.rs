@@ -13,7 +13,6 @@ use crate::{
     types::ByteString,
 };
 
-#[allow(dead_code)]
 pub struct TrackerRequest {
     pub info_hash: ByteString,
     pub peer_id: ByteString,

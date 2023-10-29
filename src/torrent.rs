@@ -1,10 +1,12 @@
-use anyhow::{anyhow, ensure, Context, Error, Result};
-use futures::future;
+use anyhow::{ensure, Context, Error, Result};
 use futures::stream::FuturesUnordered;
 use std::collections::BTreeSet;
+use std::io::SeekFrom;
 use std::path::Path;
 use std::time::Instant;
 use std::{fs, path::PathBuf, sync::Arc};
+use tokio::fs::File;
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::{spawn, sync::Mutex};
 
 use crate::{
@@ -12,7 +14,7 @@ use crate::{
     bencode::{parse_bencoded, BencodeValue},
     config::Config,
     dht::find_peers,
-    metainfo::{FileInfo, Metainfo},
+    metainfo::Metainfo,
     peer::peer_loop,
     persist::PersistState,
     sha1,
@@ -77,7 +79,7 @@ pub async fn download_torrent(
         }
     };
 
-    let state = Arc::new(Mutex::new(State {
+    let state = State {
         config: config.clone(),
         metainfo: metainfo.clone(),
         tracker_response: resp.clone(),
@@ -90,7 +92,8 @@ pub async fn download_torrent(
             .map(|p| (p.clone(), Peer::new(p)))
             .collect(),
         status: TorrentStatus::Started,
-    }));
+    };
+    let state = Arc::new(Mutex::new(state));
     trace!("init state: {:?}", state);
 
     let peer_loop_h = spawn(peer_loop(state.clone()));
@@ -111,10 +114,14 @@ pub async fn download_torrent(
         state.pieces.len() == state.metainfo.info.pieces.len(),
         "pieces length mismatch"
     );
-    ensure!(
-        state.pieces.values().all(|p| p.completed),
-        "incomplete pieces"
-    );
+    let incomplete = state
+        .pieces
+        .values()
+        .filter(|p| p.status != TorrentStatus::Saved)
+        .count();
+    if incomplete > 0 {
+        return Err(Error::msg(format!("{} incomplete pieces", incomplete)));
+    }
 
     let mut dht_peers: BTreeSet<PeerInfo> = state
         .peers
@@ -128,56 +135,51 @@ pub async fn download_torrent(
     debug!("discovered {} dht peers: {:?}", dht_peers.len(), dht_peers);
     p_state.lock().await.dht_peers.append(&mut dht_peers);
 
-    info!("writing files to disk");
-    write_to_disk(state).await?;
-
     info!("done in {}s", started.elapsed().as_secs());
     Ok(())
 }
 
-async fn write_to_disk(mut state: State) -> Result<()> {
-    debug!("partitioning pieces into files");
-    let mut data: Vec<u8> = state
-        .pieces
-        .into_values()
-        .flat_map(|p| p.blocks.into_values().flat_map(|b| b.0))
-        .collect();
-
-    let files = match state.metainfo.info.file_info {
-        FileInfo::Single(file) => vec![file],
-        FileInfo::Multi(files) => files,
+// TODO: initialize every file with `.part` suffix
+// if every file piece is written, remove suffix from the filename
+pub async fn write_piece(piece_idx: u32, state: Arc<Mutex<State>>) -> Result<()> {
+    let metainfo = {
+        let state = state.lock().await;
+        state.metainfo.clone()
     };
-
-    // TODO: check files md5_sum
-    info!("writing files");
-    let mut write_handles = vec![];
-    for file in files {
-        let file_data = data.drain(0..file.length as usize).collect();
+    // TODO: drain data instead of cloning
+    let piece = { state.lock().await.pieces.get(&piece_idx).cloned().unwrap() };
+    debug!("writing piece: {:?}", piece.file_locations);
+    for f in piece.file_locations {
         let path = PathBuf::from("download")
-            .join(&state.metainfo.info.name)
-            .join(file.path);
-        write_handles.push(spawn(write_file(path, file_data)))
+            .join(&metainfo.info.name)
+            .join(metainfo.info.file_info.files()[f.file_index].path.clone());
+        tokio::fs::create_dir_all(&path.parent().context("no parent")?).await?;
+        let data = piece
+            .blocks
+            .values()
+            .flat_map(|b| b.0.clone())
+            .skip(f.piece_offset)
+            .take(f.length)
+            .collect::<Vec<_>>();
+        ensure!(data.len() == f.length);
+        trace!(
+            "witing {} bytes at {} of {}",
+            data.len(),
+            f.offset,
+            path.display()
+        );
+        let mut file = File::options().create(true).write(true).open(path).await?;
+        file.seek(SeekFrom::Start(f.offset as u64)).await?;
+        file.write_all(&data).await?;
+        state
+            .lock()
+            .await
+            .pieces
+            .get_mut(&piece_idx)
+            .unwrap()
+            .status = TorrentStatus::Saved;
     }
-    let write_res = future::join_all(write_handles).await;
-    if write_res.into_iter().filter(|r| r.is_err()).count() != 0 {
-        return Err(Error::msg("file write errors"));
-    }
-
-    state.status = TorrentStatus::Saved;
-    info!("torrent saved: {}", state.metainfo.info.name);
     Ok(())
-}
-
-async fn write_file(path: PathBuf, data: Vec<u8>) -> Result<()> {
-    debug!("writing file ({} bytes): {:?}", data.len(), path);
-    tokio::fs::create_dir_all(&path.parent().context("no parent")?).await?;
-    let res = tokio::fs::write(&path, &data).await;
-    if let Err(e) = res {
-        error!("file write error: {e:#}");
-        return Err(anyhow!(e));
-    }
-    info!("file written ({} bytes): {:?}", data.len(), path);
-    Ok::<(), Error>(())
 }
 
 async fn discover_peers(

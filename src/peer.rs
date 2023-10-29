@@ -17,6 +17,7 @@ use crate::{
     hex::hex,
     sha1,
     state::{Block, Peer, PeerInfo, PeerStatus, State, TorrentStatus, BLOCK_SIZE},
+    torrent::write_piece,
     types::ByteString,
 };
 
@@ -459,47 +460,69 @@ async fn read_loop(
                     continue;
                 }
                 let block_index = begin / BLOCK_SIZE;
-                let mut state = state.lock().await;
-                let piece = match state.pieces.get_mut(&piece_index) {
-                    Some(p) => p,
-                    _ => {
-                        debug!("no piece with index {:?}", piece_index);
+
+                {
+                    let mut state = state.lock().await;
+                    let piece = match state.pieces.get_mut(&piece_index) {
+                        Some(p) => p,
+                        _ => {
+                            debug!("no piece with index {:?}", piece_index);
+                            continue;
+                        }
+                    };
+                    if piece.status != TorrentStatus::Started {
+                        debug!("downloaded block of already completed piece, loss");
                         continue;
                     }
-                };
-                if piece.completed {
-                    debug!("downloaded block of already completed piece, loss");
-                    continue;
-                }
-                let total_blocks = piece.total_blocks();
-                if block_index != total_blocks - 1 && block.0.len() != BLOCK_SIZE as usize {
-                    debug!("block of unexpected size: {}", block.0.len());
-                    continue;
-                }
-                if piece.blocks.insert(block_index, block).is_some() {
-                    debug!("repeaded block download, loss");
-                };
-                trace!("got block {}/{}", piece.blocks.len(), total_blocks);
-                if piece.blocks.len() as u32 == total_blocks {
-                    let piece_data: Vec<u8> = piece
-                        .blocks
-                        .values()
-                        .flat_map(|b| b.0.as_slice())
-                        .copied()
-                        .collect();
-                    let piece_hash = sha1::encode(piece_data);
-                    if piece_hash != piece.hash.0 {
-                        warn!("piece hash does not match: {:?}", piece);
-                        trace!("{}", hex(&piece_hash));
-                        trace!("{}", hex(&piece.hash.0));
+                    let total_blocks = piece.total_blocks();
+                    if block_index != total_blocks - 1 && block.0.len() != BLOCK_SIZE as usize {
+                        debug!("block of unexpected size: {}", block.0.len());
                         continue;
                     }
-                    piece.completed = true;
-                    info!(
-                        "piece completed {}/{}",
-                        state.pieces.values().filter(|p| p.completed).count(),
-                        state.pieces.len(),
-                    );
+                    if piece.blocks.insert(block_index, block).is_some() {
+                        debug!("repeaded block download, loss");
+                    };
+                    trace!("got block {}/{}", piece.blocks.len(), total_blocks);
+                    if piece.blocks.len() as u32 == total_blocks {
+                        let piece_data: Vec<u8> = piece
+                            .blocks
+                            .values()
+                            .flat_map(|b| b.0.as_slice())
+                            .copied()
+                            .collect();
+                        let piece_hash = sha1::encode(piece_data);
+                        if piece_hash != piece.hash.0 {
+                            warn!("piece hash does not match: {:?}", piece);
+                            trace!("{}", hex(&piece_hash));
+                            trace!("{}", hex(&piece.hash.0));
+                            continue;
+                        }
+                        piece.status = TorrentStatus::Downloaded;
+                        info!(
+                            "piece {}/{}/{}",
+                            state
+                                .pieces
+                                .values()
+                                .filter(|p| p.status != TorrentStatus::Started)
+                                .count(),
+                            state
+                                .pieces
+                                .values()
+                                .filter(|p| p.status > TorrentStatus::Started)
+                                .count(),
+                            state.pieces.len(),
+                        );
+                    }
+                }
+
+                if state.lock().await.pieces.get(&piece_index).unwrap().status
+                    == TorrentStatus::Downloaded
+                {
+                    // TODO: async
+                    match spawn(write_piece(piece_index, state.clone())).await {
+                        Ok(_) => debug!("piece saved"),
+                        Err(e) => error!("error writing piece: {:#}", e),
+                    };
                 }
             }
             Ok(Message::Port { port }) => match state.lock().await.peers.get_mut(&peer) {

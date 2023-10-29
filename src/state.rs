@@ -15,7 +15,7 @@ use crate::{
 
 pub const BLOCK_SIZE: u32 = 1 << 14;
 
-#[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct State {
     pub config: Config,
     pub metainfo: Metainfo,
@@ -32,7 +32,7 @@ impl State {
         let piece = self
             .pieces
             .values()
-            .filter(|p| !p.completed)
+            .filter(|p| p.status == TorrentStatus::Started)
             .choose(&mut thread_rng())
             .cloned();
         if piece.is_none() {
@@ -50,14 +50,15 @@ pub enum TorrentStatus {
     Saved,
 }
 
-#[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub struct Piece {
     pub hash: PieceHash,
     pub index: u32,
     pub length: u32,
     /// Map of blocks <block index> -> <block>
     pub blocks: BTreeMap<u32, Block>,
-    pub completed: bool,
+    pub status: TorrentStatus,
+    pub file_locations: Vec<FileLocation>,
 }
 
 impl Piece {
@@ -147,7 +148,17 @@ impl TryFrom<&[u8]> for PeerInfo {
 }
 
 pub fn init_pieces(info: &Info) -> BTreeMap<u32, Piece> {
-    let total_len = info.file_info.total_length() as u32;
+    let files_start = info
+        .file_info
+        .files()
+        .iter()
+        .scan(0, |acc, f| {
+            let res = *acc;
+            *acc += f.length;
+            Some(res)
+        })
+        .collect::<Vec<_>>();
+    let total_len = info.file_info.total_length();
     if info.pieces.len() != (total_len as f64 / info.piece_length as f64).ceil() as usize {
         warn!("total length/piece size/piece count inconsistent");
     }
@@ -155,21 +166,62 @@ pub fn init_pieces(info: &Info) -> BTreeMap<u32, Piece> {
         .iter()
         .cloned()
         .enumerate()
+        .map(|(i, p)| (i as u32, p))
         .map(|(i, p)| {
+            let length = if i == info.pieces.len() as u32 - 1 {
+                total_len % info.piece_length
+            } else {
+                info.piece_length
+            };
+            let file_locations: Vec<_> = files_start
+                .iter()
+                .copied()
+                .enumerate()
+                .flat_map(|(f_i, f_start)| {
+                    let f_len = info.file_info.files()[f_i].length;
+                    let f_end = f_start + f_len;
+                    let piece_start = i * info.piece_length;
+                    let piece_end = piece_start + length;
+                    let p_start = (f_start as i64).clamp(piece_start as i64, piece_end as i64);
+                    let p_end = (f_end as i64).clamp(piece_start as i64, piece_end as i64);
+                    let p_len = p_end - p_start;
+                    let offset = p_start - f_start as i64;
+                    let piece_offset = (p_start - piece_start as i64) as usize;
+                    if p_len != 0 {
+                        vec![FileLocation {
+                            file_index: f_i,
+                            offset: offset as usize,
+                            piece_offset,
+                            length: p_len as usize,
+                        }]
+                    } else {
+                        vec![]
+                    }
+                })
+                .collect();
+            // TODO: verify files' location integrity
+            if file_locations.iter().map(|f| f.length as u32).sum::<u32>() != length {
+                panic!("incorrect file location length");
+            }
             (
-                i as u32,
+                i,
                 Piece {
                     hash: p,
-                    index: i as u32,
-                    length: if i == info.pieces.len() - 1 {
-                        total_len % info.piece_length
-                    } else {
-                        info.piece_length
-                    },
+                    index: i,
+                    length,
                     blocks: BTreeMap::new(),
-                    completed: false,
+                    status: TorrentStatus::Started,
+                    file_locations,
                 },
             )
         })
         .collect()
+}
+
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub struct FileLocation {
+    pub file_index: usize,
+    pub offset: usize,
+    pub piece_offset: usize,
+    pub length: usize,
 }

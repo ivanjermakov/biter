@@ -70,18 +70,6 @@ impl From<&str> for BencodeValue {
     }
 }
 
-#[allow(dead_code)]
-pub fn bencode_string(value: ByteString) -> ByteString {
-    vec![
-        value.len().to_string().as_bytes().to_vec(),
-        ":".as_bytes().to_vec(),
-        value,
-    ]
-    .into_iter()
-    .flatten()
-    .collect()
-}
-
 pub fn parse_bencoded(bencoded: ByteString) -> (Option<BencodeValue>, ByteString) {
     let next = match bencoded.first() {
         Some(f) => f,
