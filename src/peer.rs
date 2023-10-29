@@ -536,7 +536,7 @@ async fn read_loop(
                 debug!("no handler for message, skipping: {:?}", msg);
             }
             Err(e) => {
-                warn!("{e:#}");
+                debug!("peer error: {e:#}");
                 return Err(e);
             }
         };

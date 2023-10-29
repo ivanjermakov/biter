@@ -56,6 +56,7 @@ pub async fn download_torrent(
         )
     };
     let peers = find_peers(dht_peers, peer_id.clone(), info_hash.to_vec(), 50).await?;
+    info!("discovered {} dht peers", peers.len());
 
     let tracker_response = tracker_request(
         metainfo.announce.clone(),
@@ -138,7 +139,7 @@ pub async fn download_torrent(
             port: p.dht_port.unwrap(),
         })
         .collect();
-    debug!("discovered {} dht peers: {:?}", dht_peers.len(), dht_peers);
+    debug!("discovered {} dht nodes: {:?}", dht_peers.len(), dht_peers);
     p_state.lock().await.dht_peers.append(&mut dht_peers);
 
     info!("done in {}s", started.elapsed().as_secs());
@@ -177,14 +178,11 @@ pub async fn write_piece(piece_idx: u32, state: Arc<Mutex<State>>) -> Result<()>
         let mut file = File::options().create(true).write(true).open(path).await?;
         file.seek(SeekFrom::Start(f.offset as u64)).await?;
         file.write_all(&data).await?;
-        state
-            .lock()
-            .await
-            .pieces
-            .get_mut(&piece_idx)
-            .unwrap()
-            .status = TorrentStatus::Saved;
-        // TODO: drop written piece data
+
+        let mut state = state.lock().await;
+        let p = state.pieces.get_mut(&piece_idx).unwrap();
+        p.status = TorrentStatus::Saved;
+        p.blocks.clear();
     }
     Ok(())
 }
