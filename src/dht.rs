@@ -1,10 +1,13 @@
-use std::{collections::BTreeSet, time::Duration};
+use std::{
+    cmp,
+    collections::{BTreeSet, VecDeque},
+    time::Duration,
+};
 
 use anyhow::{Context, Error, Result};
-use async_recursion::async_recursion;
-use futures::stream::FuturesUnordered;
+use futures::{stream::FuturesUnordered, StreamExt};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
-use tokio::{spawn, time::timeout};
+use tokio::time::timeout;
 
 use crate::{
     bencode::{parse_bencoded, BencodeValue},
@@ -14,22 +17,66 @@ use crate::{
     udp::send_udp,
 };
 
-// TODO: recursive async works weird, rewrite into queue instead
-#[async_recursion]
 pub async fn find_peers(
-    peer: PeerInfo,
+    dht_peers: Vec<PeerInfo>,
     peer_id: ByteString,
     info_hash: ByteString,
     min: usize,
-    depth: usize,
 ) -> Result<BTreeSet<PeerInfo>> {
-    if min == 0 {
-        return Ok(BTreeSet::new());
+    let mut peers = BTreeSet::new();
+    let mut queue = VecDeque::from(dht_peers);
+    loop {
+        debug!("dht queue: {} nodes", queue.len());
+
+        let chunk = queue
+            .drain(..cmp::min(queue.len(), 100))
+            .collect::<Vec<_>>();
+        if chunk.is_empty() {
+            break;
+        }
+
+        let mut handles = chunk
+            .into_iter()
+            .map(|p| find_peers_single(p.clone(), peer_id.clone(), info_hash.clone()))
+            .collect::<FuturesUnordered<_>>();
+        while let Some(res) = handles.next().await {
+            match res {
+                Ok(Ok(values)) => {
+                    debug!("received {} new peers via dht", values.len());
+                    for v in values {
+                        peers.insert(v);
+                    }
+                    if peers.len() >= min {
+                        return Ok(peers);
+                    }
+                }
+                Ok(Err(nodes)) => {
+                    for n in nodes {
+                        if !queue.contains(&n) {
+                            queue.insert(0, n);
+                        }
+                    }
+                }
+                Err(e) => {
+                    trace!("dht error: {e:#}");
+                }
+            }
+        }
     }
-    trace!("quering dht peer: {:?}, {} left", peer, min);
+
+    debug!("dht queue exhausted, found {} peers", peers.len());
+    Ok(peers)
+}
+
+async fn find_peers_single(
+    peer: PeerInfo,
+    peer_id: ByteString,
+    info_hash: ByteString,
+) -> Result<Result<Vec<PeerInfo>, Vec<PeerInfo>>> {
+    trace!("quering dht peer: {:?}", peer);
     let res = timeout(
         // TODO: make configurable
-        Duration::from_millis(200),
+        Duration::from_millis(500),
         dht_find_peers(&peer, &peer_id, info_hash.clone()),
     )
     .await??;
@@ -46,9 +93,9 @@ pub async fn find_peers(
         _ => return Err(Error::msg("no response dict")),
     };
 
-    let values: Option<Vec<PeerInfo>> = match r_dict.get("values").cloned() {
-        Some(BencodeValue::List(vs)) => vs
-            .into_iter()
+    if let Some(BencodeValue::List(vs)) = r_dict.get("values") {
+        return Ok(Ok(vs
+            .iter()
             .map(|b_v| {
                 let v = match b_v {
                     BencodeValue::String(s) => s,
@@ -56,67 +103,20 @@ pub async fn find_peers(
                 };
                 PeerInfo::try_from(v.as_slice())
             })
-            .collect::<Result<Vec<PeerInfo>>>()
-            .ok(),
-        _ => None,
-    };
+            .collect::<Result<Vec<PeerInfo>>>()?));
+    }
 
-    let nodes: Option<Vec<PeerInfo>> = match r_dict.get("nodes").cloned() {
-        Some(BencodeValue::String(ns_str)) => {
-            if ns_str.len() % 6 != 0 {
-                trace!("nodes string length is weird: {}", hex(&ns_str));
-            }
-            Some(
-                ns_str
-                    .chunks_exact(6)
-                    .map(PeerInfo::try_from)
-                    .collect::<Result<Vec<PeerInfo>>>()?,
-            )
+    if let Some(BencodeValue::String(ns_str)) = r_dict.get("nodes") {
+        if ns_str.len() % 6 != 0 {
+            trace!("nodes string length is weird: {}", hex(ns_str));
         }
-        _ => None,
-    };
-
-    debug!(
-        "received {}/{} values, {} nodes at depth {}",
-        values.clone().unwrap_or_default().len(),
-        min,
-        nodes.clone().unwrap_or_default().len(),
-        depth
-    );
-    let mut found = BTreeSet::new();
-    if let Some(vs) = values {
-        return Ok(vs.into_iter().collect());
+        return Ok(Err(ns_str
+            .chunks_exact(6)
+            .map(PeerInfo::try_from)
+            .collect::<Result<Vec<PeerInfo>>>()?));
     }
 
-    if let Some(ns) = nodes {
-        let handles = ns
-            .into_iter()
-            .map(|n| {
-                spawn(find_peers(
-                    n,
-                    peer_id.clone(),
-                    info_hash.clone(),
-                    min - found.len(),
-                    depth + 1,
-                ))
-            })
-            .collect::<FuturesUnordered<_>>();
-        for h in handles {
-            if let Ok(Ok(vs)) = h.await {
-                for v in vs {
-                    found.insert(v);
-                }
-                if found.len() >= min {
-                    return Ok(found);
-                }
-            }
-        }
-    }
-    if found.is_empty() {
-        Err(Error::msg("no peers found"))
-    } else {
-        Ok(found)
-    }
+    Err(Error::msg("malformed dht response"))
 }
 
 async fn dht_find_peers(

@@ -1,5 +1,4 @@
 use anyhow::{ensure, Context, Error, Result};
-use futures::stream::FuturesUnordered;
 use std::collections::BTreeSet;
 use std::io::SeekFrom;
 use std::path::Path;
@@ -49,7 +48,14 @@ pub async fn download_torrent(
     };
     let info_hash = sha1::encode(info_dict_str);
 
-    let peers = discover_peers(p_state.clone(), &info_hash).await?;
+    let (dht_peers, peer_id) = {
+        let p_state = p_state.lock().await;
+        (
+            p_state.dht_peers.iter().cloned().collect(),
+            p_state.peer_id.clone(),
+        )
+    };
+    let peers = find_peers(dht_peers, peer_id.clone(), info_hash.to_vec(), 50).await?;
 
     let tracker_response = tracker_request(
         metainfo.announce.clone(),
@@ -178,41 +184,7 @@ pub async fn write_piece(piece_idx: u32, state: Arc<Mutex<State>>) -> Result<()>
             .get_mut(&piece_idx)
             .unwrap()
             .status = TorrentStatus::Saved;
+        // TODO: drop written piece data
     }
     Ok(())
-}
-
-async fn discover_peers(
-    p_state: Arc<Mutex<PersistState>>,
-    info_hash: &[u8],
-) -> Result<BTreeSet<PeerInfo>> {
-    let (dht_peers, peer_id) = {
-        let p_state = p_state.lock().await;
-        (p_state.dht_peers.clone(), p_state.peer_id.clone())
-    };
-    let mut peers = BTreeSet::new();
-    // TODO: make configurable
-    let min_p = 50;
-
-    let handles = dht_peers
-        .into_iter()
-        .map(|p| spawn(find_peers(p, peer_id.clone(), info_hash.to_vec(), min_p, 0)))
-        .collect::<FuturesUnordered<_>>();
-    for h in handles {
-        match h.await {
-            Ok(Ok(ps)) => {
-                for p in ps {
-                    peers.insert(p);
-                }
-                if peers.len() >= min_p {
-                    break;
-                }
-            }
-            e => {
-                trace!("dht error: {:?}", e);
-            }
-        }
-    }
-    info!("discovered {} peers: {:?}", peers.len(), peers);
-    Ok(peers)
 }
