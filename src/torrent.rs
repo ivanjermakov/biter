@@ -111,11 +111,7 @@ pub async fn download_torrent(
     trace!("aborting tracker loop");
     let _ = tracker_loop_h.ensure_abort().await;
 
-    trace!("unwrapping state");
-    let state = Arc::try_unwrap(state)
-        .map_err(|_| Error::msg("dangling state reference"))?
-        .into_inner();
-
+    let state = state.lock().await;
     debug!("verifying downloaded pieces");
     ensure!(
         state.pieces.len() == state.metainfo.info.pieces.len(),
