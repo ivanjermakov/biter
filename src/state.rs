@@ -160,15 +160,18 @@ pub fn init_pieces(info: &Info) -> BTreeMap<u32, Piece> {
         .collect::<Vec<_>>();
     let total_len = info.file_info.total_length();
     if info.pieces.len() != (total_len as f64 / info.piece_length as f64).ceil() as usize {
-        warn!("total length/piece size/piece count inconsistent");
+        warn!(
+            "total length/piece size/piece count inconsistent: {} info pieces, {} expected",
+            info.pieces.len(),
+            (total_len as f64 / info.piece_length as f64).ceil()
+        );
     }
     info.pieces
         .iter()
         .cloned()
         .enumerate()
-        .map(|(i, p)| (i as u32, p))
-        .map(|(i, p)| {
-            let length = if i == info.pieces.len() as u32 - 1 {
+        .flat_map(|(i, p)| {
+            let length: u64 = if i == info.pieces.len() - 1 {
                 total_len % info.piece_length
             } else {
                 info.piece_length
@@ -180,7 +183,7 @@ pub fn init_pieces(info: &Info) -> BTreeMap<u32, Piece> {
                 .flat_map(|(f_i, f_start)| {
                     let f_len = info.file_info.files()[f_i].length;
                     let f_end = f_start + f_len;
-                    let piece_start = i * info.piece_length;
+                    let piece_start = i as u64 * info.piece_length;
                     let piece_end = piece_start + length;
                     let p_start = (f_start as i64).clamp(piece_start as i64, piece_end as i64);
                     let p_end = (f_end as i64).clamp(piece_start as i64, piece_end as i64);
@@ -199,21 +202,22 @@ pub fn init_pieces(info: &Info) -> BTreeMap<u32, Piece> {
                     }
                 })
                 .collect();
-            // TODO: verify files' location integrity
-            if file_locations.iter().map(|f| f.length as u32).sum::<u32>() != length {
-                panic!("incorrect file location length");
+            if file_locations.is_empty() {
+                debug!("piece does not map to any files: {:?}", p);
+                return vec![];
             }
-            (
-                i,
+            // TODO: verify files' location integrity
+            vec![(
+                i as u32,
                 Piece {
                     hash: p,
-                    index: i,
-                    length,
+                    index: i as u32,
+                    length: length as u32,
                     blocks: BTreeMap::new(),
                     status: TorrentStatus::Started,
                     file_locations,
                 },
-            )
+            )]
         })
         .collect()
 }

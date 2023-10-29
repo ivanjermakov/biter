@@ -16,12 +16,12 @@ use crate::{
 pub struct TrackerRequest {
     pub info_hash: ByteString,
     pub peer_id: ByteString,
-    pub port: i64,
-    pub uploaded: i64,
-    pub downloaded: i64,
-    pub left: i64,
-    pub compact: i64,
-    pub no_peer_id: i64,
+    pub port: u64,
+    pub uploaded: u64,
+    pub downloaded: u64,
+    pub left: u64,
+    pub compact: u64,
+    pub no_peer_id: u64,
     pub event: Option<TrackerEvent>,
     pub ip: Option<ByteString>,
     pub numwant: Option<i64>,
@@ -40,7 +40,7 @@ impl TrackerRequest {
         TrackerRequest {
             info_hash,
             peer_id,
-            port: port as i64,
+            port: port as u64,
             // TODO
             uploaded: 0,
             // TODO

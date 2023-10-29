@@ -72,7 +72,7 @@ pub async fn download_torrent(
             TrackerResponseSuccess {
                 // set peers discovered via DHT
                 peers,
-                // should never poll again, use rely on DHT
+                // should never poll again, rely on DHT
                 interval: i64::MAX,
                 ..Default::default()
             }
@@ -196,7 +196,7 @@ async fn discover_peers(
 
     let handles = dht_peers
         .into_iter()
-        .map(|p| spawn(find_peers(p, peer_id.clone(), info_hash.to_vec(), min_p)))
+        .map(|p| spawn(find_peers(p, peer_id.clone(), info_hash.to_vec(), min_p, 0)))
         .collect::<FuturesUnordered<_>>();
     for h in handles {
         match h.await {

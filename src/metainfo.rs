@@ -16,7 +16,7 @@ pub struct Metainfo {
 
 #[derive(Clone, PartialEq, PartialOrd, Hash)]
 pub struct Info {
-    pub piece_length: u32,
+    pub piece_length: u64,
     pub pieces: Vec<PieceHash>,
     pub name: String,
     pub file_info: FileInfo,
@@ -41,9 +41,9 @@ pub enum FileInfo {
 }
 
 impl FileInfo {
-    pub fn total_length(&self) -> u32 {
+    pub fn total_length(&self) -> u64 {
         match self {
-            FileInfo::Single(path) => path.length,
+            FileInfo::Single(file) => file.length,
             FileInfo::Multi(files) => files.iter().map(|f| f.length).sum(),
         }
     }
@@ -58,7 +58,7 @@ impl FileInfo {
 
 #[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
 pub struct PathInfo {
-    pub length: u32,
+    pub length: u64,
     pub path: PathBuf,
     pub md5_sum: Option<String>,
 }
@@ -88,7 +88,7 @@ impl TryFrom<BencodeValue> for Metainfo {
             None => FileInfo::Single(PathInfo {
                 path: PathBuf::from(&name),
                 length: match info_dict.get("length") {
-                    Some(BencodeValue::Int(v)) => *v as u32,
+                    Some(BencodeValue::Int(v)) => *v as u64,
                     _ => return Err("'length' missing".into()),
                 },
                 md5_sum: match info_dict.get("md5_sum") {
@@ -100,7 +100,7 @@ impl TryFrom<BencodeValue> for Metainfo {
         let metainfo = Metainfo {
             info: Info {
                 piece_length: match info_dict.get("piece length") {
-                    Some(BencodeValue::Int(v)) => *v as u32,
+                    Some(BencodeValue::Int(v)) => *v as u64,
                     _ => return Err("'piece length' missing".into()),
                 },
                 pieces,
@@ -172,7 +172,7 @@ fn parse_files_info(value: &BencodeValue) -> Result<Vec<PathInfo>, String> {
                     };
                     Ok(PathInfo {
                         length: match d.get("length") {
-                            Some(BencodeValue::Int(v)) => *v as u32,
+                            Some(BencodeValue::Int(v)) => *v as u64,
                             _ => return Err("'length' missing".into()),
                         },
                         path,

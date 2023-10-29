@@ -14,12 +14,14 @@ use crate::{
     udp::send_udp,
 };
 
+// TODO: recursive async works weird, rewrite into queue instead
 #[async_recursion]
 pub async fn find_peers(
     peer: PeerInfo,
     peer_id: ByteString,
     info_hash: ByteString,
     min: usize,
+    depth: usize,
 ) -> Result<BTreeSet<PeerInfo>> {
     if min == 0 {
         return Ok(BTreeSet::new());
@@ -27,7 +29,7 @@ pub async fn find_peers(
     trace!("quering dht peer: {:?}, {} left", peer, min);
     let res = timeout(
         // TODO: make configurable
-        Duration::from_secs(1),
+        Duration::from_millis(200),
         dht_find_peers(&peer, &peer_id, info_hash.clone()),
     )
     .await??;
@@ -75,9 +77,11 @@ pub async fn find_peers(
     };
 
     debug!(
-        "received {} values, {} nodes",
+        "received {}/{} values, {} nodes at depth {}",
         values.clone().unwrap_or_default().len(),
-        nodes.clone().unwrap_or_default().len()
+        min,
+        nodes.clone().unwrap_or_default().len(),
+        depth
     );
     let mut found = BTreeSet::new();
     if let Some(vs) = values {
@@ -93,6 +97,7 @@ pub async fn find_peers(
                     peer_id.clone(),
                     info_hash.clone(),
                     min - found.len(),
+                    depth + 1,
                 ))
             })
             .collect::<FuturesUnordered<_>>();
