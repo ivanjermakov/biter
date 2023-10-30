@@ -14,6 +14,7 @@ mod abort;
 mod bencode;
 mod config;
 mod dht;
+mod extension;
 mod feature;
 mod hex;
 mod metainfo;

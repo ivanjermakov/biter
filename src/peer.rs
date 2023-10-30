@@ -14,6 +14,7 @@ use tokio::{
 
 use crate::{
     bencode::{parse_bencoded, BencodeValue},
+    extension::Extension,
     feature::Feature,
     hex::hex,
     sha1,
@@ -399,19 +400,7 @@ pub async fn do_handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<
             &mut w_stream,
             Message::Extended {
                 ext_id: 0,
-                payload: Some(BencodeValue::Dict(
-                    [(
-                        "m".into(),
-                        BencodeValue::Dict(
-                            [].into_iter()
-                                // .enumerate()
-                                // .map(|(i, name)| (name.into(), BencodeValue::from(i as i64)))
-                                .collect(),
-                        ),
-                    )]
-                    .into_iter()
-                    .collect(),
-                )),
+                payload: Some(Extension::handshake(&[Extension::Metadata])),
             },
         )
         .await?;
