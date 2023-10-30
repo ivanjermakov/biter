@@ -15,6 +15,7 @@ use tokio::{
 use crate::{
     abort::EnsureAbort,
     bencode::{parse_bencoded, BencodeValue},
+    feature::Feature,
     hex::hex,
     sha1,
     state::{Block, Peer, PeerInfo, PeerStatus, State, TorrentStatus, BLOCK_SIZE},
@@ -179,15 +180,10 @@ pub async fn handshake(peer: &PeerInfo, state: Arc<Mutex<State>>) -> Result<(Tcp
     debug!("connecting to peer {peer:?}");
     let mut stream = timeout(peer_connect_timeout, TcpStream::connect(peer.to_addr())).await??;
 
-    let mut reserved = vec![0u8; 8];
-    // DHT protocol support (BEP-5)
-    reserved[7] |= 0x01;
-    // extension protocol support (BEP-10)
-    reserved[5] |= 0x10;
     let handshake: Vec<u8> = Message::Handshake {
         info_hash: info_hash.clone(),
         peer_id: peer_id.clone(),
-        reserved,
+        reserved: Feature::new_with(&[Feature::Dht, Feature::Extension]),
     }
     .into();
 
@@ -402,7 +398,7 @@ pub async fn do_handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<
     let (r_stream, mut w_stream) = stream.into_split();
 
     let supports_ext = match handshake {
-        Message::Handshake { reserved, .. } => reserved[5] & 0x10 != 0,
+        Message::Handshake { reserved, .. } => Feature::Extension.enabled(&reserved),
         _ => false,
     };
     if supports_ext {
