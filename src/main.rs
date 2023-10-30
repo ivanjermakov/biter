@@ -47,9 +47,9 @@ async fn try_main() -> Result<()> {
 
     let config = Config {
         port: 6881,
-        respect_choke: false,
-        choke_wait: Duration::from_millis(100),
-        reconnect_wait: Duration::from_secs(10),
+        respect_choke: true,
+        choke_wait: Duration::from_secs(10),
+        reconnect_wait: Duration::from_secs(20),
         downloaded_check_wait: Duration::from_secs(1),
         peer_connect_timeout: Duration::from_secs(4),
         piece_request_wait: Duration::from_millis(100),

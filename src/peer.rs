@@ -13,7 +13,6 @@ use tokio::{
 };
 
 use crate::{
-    abort::EnsureAbort,
     bencode::{parse_bencoded, BencodeValue},
     feature::Feature,
     hex::hex,
@@ -192,13 +191,13 @@ pub async fn handshake(peer: &PeerInfo, state: Arc<Mutex<State>>) -> Result<(Tcp
     stream.flush().await?;
 
     let mut read_packet = [0; 68];
-    debug!("reading handshake");
+    trace!("reading handshake");
     stream
         .read_exact(&mut read_packet)
         .await
         .context("read error")?;
     let msg: Vec<u8> = read_packet.to_vec();
-    debug!("peer response: {}", hex(&msg));
+    trace!("peer response: {}", hex(&msg));
 
     let msg = Message::try_from(msg)
         .map_err(Error::msg)
@@ -337,12 +336,6 @@ pub async fn peer_loop(state: Arc<Mutex<State>>) -> Result<()> {
                     sleep(config.downloaded_check_wait).await
                 }
             } => {
-                // this is important to ensure that no tasks hold Arc<State> reference
-                trace!("closing {} peer connections", handles.len());
-                for h in handles {
-                    let _ = h.ensure_abort().await;
-                }
-                trace!("peer connections closed");
                 return Ok(())
             },
             _ = sleep(config.reconnect_wait) => ()
@@ -447,13 +440,15 @@ pub async fn write_loop(
 ) -> Result<()> {
     loop {
         {
-            let state = state.lock().await;
-            if state.config.respect_choke {
-                let p = state.peers.get(&peer).cloned();
+            let (config, p) = {
+                let state = state.lock().await;
+                (state.config.clone(), state.peers.get(&peer).cloned())
+            };
+            if config.respect_choke {
                 if let Some(p) = p {
                     if p.choked {
-                        info!("peer is choked, waiting");
-                        sleep(state.config.choke_wait).await;
+                        debug!("peer is choked, waiting");
+                        sleep(config.choke_wait).await;
                         continue;
                     }
                 }
