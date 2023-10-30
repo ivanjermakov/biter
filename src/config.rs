@@ -9,4 +9,5 @@ pub struct Config {
     pub downloaded_check_wait: Duration,
     pub peer_connect_timeout: Duration,
     pub piece_request_wait: Duration,
+    pub dht_chunk: usize
 }

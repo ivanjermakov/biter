@@ -53,6 +53,7 @@ async fn try_main() -> Result<()> {
         downloaded_check_wait: Duration::from_secs(1),
         peer_connect_timeout: Duration::from_secs(4),
         piece_request_wait: Duration::from_millis(100),
+        dht_chunk: 200,
     };
 
     let state_path = expanduser("~/.local/state/biter")?;

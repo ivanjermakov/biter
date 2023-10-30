@@ -22,6 +22,7 @@ pub async fn find_peers(
     peer_id: ByteString,
     info_hash: ByteString,
     min: usize,
+    dht_chunk: usize,
 ) -> Result<BTreeSet<PeerInfo>> {
     let mut peers = BTreeSet::new();
     let mut queue = VecDeque::from(dht_peers);
@@ -29,7 +30,7 @@ pub async fn find_peers(
         debug!("dht queue: {} nodes", queue.len());
 
         let chunk = queue
-            .drain(..cmp::min(queue.len(), 100))
+            .drain(..cmp::min(queue.len(), dht_chunk))
             .collect::<Vec<_>>();
         if chunk.is_empty() {
             break;
@@ -42,10 +43,18 @@ pub async fn find_peers(
         while let Some(res) = handles.next().await {
             match res {
                 Ok(Ok(values)) => {
-                    debug!("received {} new peers via dht", values.len());
+                    let found = values.len();
+                    let before = peers.len();
                     for v in values {
                         peers.insert(v);
                     }
+                    info!(
+                        "received {} new peers via dht, {}/{}/{}",
+                        found,
+                        peers.len() - before,
+                        peers.len(),
+                        min
+                    );
                     if peers.len() >= min {
                         return Ok(peers);
                     }

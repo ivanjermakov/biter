@@ -55,7 +55,7 @@ pub async fn download_torrent(
             p_state.peer_id.clone(),
         )
     };
-    let peers = find_peers(dht_peers, peer_id.clone(), info_hash.to_vec(), 50).await?;
+    let peers = find_peers(dht_peers, peer_id.clone(), info_hash.to_vec(), 50, config.dht_chunk).await?;
     info!("discovered {} dht peers", peers.len());
 
     let tracker_response = tracker_request(
