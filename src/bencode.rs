@@ -70,6 +70,12 @@ impl From<&str> for BencodeValue {
     }
 }
 
+impl From<i64> for BencodeValue {
+    fn from(value: i64) -> Self {
+        BencodeValue::Int(value)
+    }
+}
+
 pub fn parse_bencoded(bencoded: ByteString) -> (Option<BencodeValue>, ByteString) {
     let next = match bencoded.first() {
         Some(f) => f,

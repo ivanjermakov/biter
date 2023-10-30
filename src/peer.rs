@@ -14,6 +14,7 @@ use tokio::{
 
 use crate::{
     abort::EnsureAbort,
+    bencode::{parse_bencoded, BencodeValue},
     hex::hex,
     sha1,
     state::{Block, Peer, PeerInfo, PeerStatus, State, TorrentStatus, BLOCK_SIZE},
@@ -26,6 +27,7 @@ pub enum Message {
     Handshake {
         info_hash: Vec<u8>,
         peer_id: Vec<u8>,
+        reserved: Vec<u8>,
     },
     KeepAlive,
     Choke,
@@ -56,6 +58,10 @@ pub enum Message {
     Port {
         port: u16,
     },
+    Extended {
+        ext_id: u8,
+        payload: Option<BencodeValue>,
+    },
 }
 
 impl From<Message> for Vec<u8> {
@@ -64,12 +70,13 @@ impl From<Message> for Vec<u8> {
             n.to_be_bytes().to_vec()
         }
         match value {
-            Message::Handshake { info_hash, peer_id } => {
+            Message::Handshake {
+                info_hash,
+                peer_id,
+                reserved,
+            } => {
                 let pstr = "BitTorrent protocol";
                 let pstrlen = &[pstr.len() as u8];
-                let mut reserved = [0u8; 8];
-                // DHT protocol support, 63rd feature bit
-                reserved[7] |= 1;
                 [pstrlen, pstr.as_bytes(), &reserved, &info_hash, &peer_id].concat()
             }
             Message::KeepAlive => [u32tb(0).as_slice()].concat(),
@@ -120,6 +127,10 @@ impl From<Message> for Vec<u8> {
             ]
             .concat(),
             Message::Port { port } => [u32tb(3).as_slice(), &[9], &port.to_be_bytes()].concat(),
+            Message::Extended { ext_id, payload } => {
+                let p = payload.map(|p| p.encode()).unwrap_or_default();
+                [u32tb(p.len() as u32 + 2).as_slice(), &[20], &[ext_id], &p].concat()
+            }
         }
     }
 }
@@ -142,6 +153,7 @@ impl TryFrom<Vec<u8>> for Message {
         Ok(Message::Handshake {
             info_hash: value.as_slice()[28..48].to_vec(),
             peer_id: value.as_slice()[48..68].to_vec(),
+            reserved: value.as_slice()[20..28].to_vec(),
         })
     }
 }
@@ -155,7 +167,7 @@ pub fn generate_peer_id() -> ByteString {
     ["-ER0000-".as_bytes(), &rand].concat()
 }
 
-pub async fn handshake(peer: &PeerInfo, state: Arc<Mutex<State>>) -> Result<TcpStream> {
+pub async fn handshake(peer: &PeerInfo, state: Arc<Mutex<State>>) -> Result<(TcpStream, Message)> {
     let (info_hash, peer_id, peer_connect_timeout) = {
         let state = state.lock().await;
         (
@@ -166,9 +178,16 @@ pub async fn handshake(peer: &PeerInfo, state: Arc<Mutex<State>>) -> Result<TcpS
     };
     debug!("connecting to peer {peer:?}");
     let mut stream = timeout(peer_connect_timeout, TcpStream::connect(peer.to_addr())).await??;
+
+    let mut reserved = vec![0u8; 8];
+    // DHT protocol support (BEP-5)
+    reserved[7] |= 0x01;
+    // extension protocol support (BEP-10)
+    reserved[5] |= 0x10;
     let handshake: Vec<u8> = Message::Handshake {
         info_hash: info_hash.clone(),
         peer_id: peer_id.clone(),
+        reserved,
     }
     .into();
 
@@ -184,15 +203,20 @@ pub async fn handshake(peer: &PeerInfo, state: Arc<Mutex<State>>) -> Result<TcpS
         .context("read error")?;
     let msg: Vec<u8> = read_packet.to_vec();
     debug!("peer response: {}", hex(&msg));
-    if let Message::Handshake {
-        info_hash: h_info_hash,
-        ..
-    } = Message::try_from(msg)
+
+    let msg = Message::try_from(msg)
         .map_err(Error::msg)
-        .context("handshake parse error")?
+        .context("handshake parse error")?;
+    if let Message::Handshake {
+        info_hash: ref h_info_hash,
+        ..
+    } = msg
     {
-        ensure!(h_info_hash == *info_hash, "response `info_hash` differ");
-        Ok(stream)
+        ensure!(
+            h_info_hash.clone() == info_hash,
+            "response `info_hash` differ"
+        );
+        Ok((stream, msg))
     } else {
         Err(Error::msg("unexpected message"))
     }
@@ -254,6 +278,17 @@ pub async fn read_message(stream: &mut OwnedReadHalf) -> Result<Message> {
                 9 if len == 3 => Ok(Message::Port {
                     port: u16::from_be_bytes(payload_p[0..2].try_into()?),
                 }),
+                20 => {
+                    let ext_id = payload_p[0];
+                    let payload = match &payload_p[1..] {
+                        &[] => None,
+                        p => match parse_bencoded(p.to_vec()) {
+                            (Some(v @ BencodeValue::Dict(..)), left) if left.is_empty() => Some(v),
+                            _ => None,
+                        },
+                    };
+                    Ok(Message::Extended { ext_id, payload })
+                }
                 _ => Err(Error::msg(format!(
                     "unexpected message: {}",
                     hex(&[len_p.as_ref(), &id_p, payload_p.as_slice()].concat())
@@ -355,7 +390,7 @@ pub async fn handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()>
 }
 
 pub async fn do_handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()> {
-    let stream = handshake(&peer, state.clone())
+    let (stream, handshake) = handshake(&peer, state.clone())
         .await
         .context("handshake error")?;
     info!("successfull handshake with peer {:?}", peer);
@@ -366,6 +401,32 @@ pub async fn do_handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<
 
     let (r_stream, mut w_stream) = stream.into_split();
 
+    let supports_ext = match handshake {
+        Message::Handshake { reserved, .. } => reserved[5] & 0x10 != 0,
+        _ => false,
+    };
+    if supports_ext {
+        send_message(
+            &mut w_stream,
+            Message::Extended {
+                ext_id: 0,
+                payload: Some(BencodeValue::Dict(
+                    [(
+                        "m".into(),
+                        BencodeValue::Dict(
+                            [].into_iter()
+                                // .enumerate()
+                                // .map(|(i, name)| (name.into(), BencodeValue::from(i as i64)))
+                                .collect(),
+                        ),
+                    )]
+                    .into_iter()
+                    .collect(),
+                )),
+            },
+        )
+        .await?;
+    }
     send_message(&mut w_stream, Message::Unchoke).await?;
     send_message(&mut w_stream, Message::Interested).await?;
 
@@ -532,11 +593,14 @@ async fn read_loop(
                 }
                 _ => debug!("no peer {:?}", peer),
             },
+            Ok(Message::Extended { ext_id, payload }) => {
+                debug!("got extended message: {}@{:?}", ext_id, payload);
+            }
             Ok(msg) => {
                 debug!("no handler for message, skipping: {:?}", msg);
             }
             Err(e) => {
-                debug!("peer error: {e:#}");
+                warn!("peer message read error: {e:#}");
                 return Err(e);
             }
         };
