@@ -26,28 +26,28 @@ pub async fn tracker_request_udp(
 
     let conn_id: i64 = 0x41727101980;
     let tx_id: i32 = thread_rng().gen();
-    let connect_pkg = [
+    let connect_pkt = [
         &conn_id.to_be_bytes()[..],
         &0_i32.to_be_bytes(),
         &tx_id.to_be_bytes(),
     ]
     .concat();
-    trace!("sending connect pkg: {}", hex(&connect_pkg));
-    let pkg = send_udp(&tracker_addr, &connect_pkg).await?.0;
-    trace!("read connect pkg: {}", hex(&pkg));
-    ensure!(pkg.len() >= 16, "connect packet too short");
+    trace!("sending connect pkt: {}", hex(&connect_pkt));
+    let pkt = send_udp(&tracker_addr, &connect_pkt).await?.0;
+    trace!("read connect pkt: {}", hex(&pkt));
+    ensure!(pkt.len() >= 16, "connect packet too short");
     let conn_id = {
-        ensure!(i32_from_slice(&pkg[0..4])? == 0, "action is not connect");
+        ensure!(i32_from_slice(&pkt[0..4])? == 0, "action is not connect");
         ensure!(
-            i32_from_slice(&pkg[4..8])? == tx_id,
+            i32_from_slice(&pkt[4..8])? == tx_id,
             "transaction id doesn't match"
         );
-        i64::from_be_bytes(pkg[8..16].try_into()?)
+        i64::from_be_bytes(pkt[8..16].try_into()?)
     };
     trace!("connection id: {}", hex(&conn_id.to_be_bytes()));
 
     let tx_id: i32 = thread_rng().gen();
-    let announce_pkg = [
+    let announce_pkt = [
         &conn_id.to_be_bytes()[..],
         &1_i32.to_be_bytes(),
         &tx_id.to_be_bytes(),
@@ -74,33 +74,33 @@ pub async fn tracker_request_udp(
     ]
     .concat();
     ensure!(
-        announce_pkg.len() == 98,
-        format!("announce pkg is incorrect size: {}", announce_pkg.len())
+        announce_pkt.len() == 98,
+        format!("announce pkt is incorrect size: {}", announce_pkt.len())
     );
-    trace!("sending announce pkg: {}", hex(&connect_pkg));
-    let (pkg, addr) = send_udp(&tracker_addr, &announce_pkg).await?;
+    trace!("sending announce pkt: {}", hex(&connect_pkt));
+    let (pkt, addr) = send_udp(&tracker_addr, &announce_pkt).await?;
     if addr.is_ipv6() {
         todo!("ipv6 tracker response");
     }
-    ensure!(pkg.len() >= 20, "announce packet too short");
-    ensure!((pkg.len() - 20) % 6 == 0, "announce packet wierd size");
+    ensure!(pkt.len() >= 20, "announce packet too short");
+    ensure!((pkt.len() - 20) % 6 == 0, "announce packet wierd size");
     ensure!(
-        i32::from_be_bytes(pkg[0..4].try_into()?) == 1,
+        i32::from_be_bytes(pkt[0..4].try_into()?) == 1,
         "action is not announce"
     );
     ensure!(
-        i32_from_slice(&pkg[4..8])? == tx_id,
+        i32_from_slice(&pkt[4..8])? == tx_id,
         "transaction id doesn't match"
     );
-    let addr_count = (pkg.len() - 20) / 6;
+    let addr_count = (pkt.len() - 20) / 6;
     let peers = (0..addr_count)
         .map(|i| 20 + 6 * i)
-        .map(|i| PeerInfo::try_from(&pkg[i..i + 6]))
+        .map(|i| PeerInfo::try_from(&pkt[i..i + 6]))
         .collect::<Result<_, _>>()?;
 
     let resp = TrackerResponse::Success(TrackerResponseSuccess {
         peers,
-        interval: i32::from_be_bytes(pkg[8..12].try_into()?) as i64,
+        interval: i32::from_be_bytes(pkt[8..12].try_into()?) as i64,
         warning_message: None,
         min_interval: None,
         tracker_id: None,

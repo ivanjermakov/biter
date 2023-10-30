@@ -13,13 +13,13 @@ pub async fn send_udp(addr: &str, packet: &[u8]) -> Result<(Vec<u8>, SocketAddr)
     socket.connect(addr).await?;
     trace!("connected");
 
-    trace!("sending pkg: {}", hex(packet));
+    trace!("sending pkt: {}", hex(packet));
     socket.send(packet).await?;
 
-    trace!("reading pkg");
+    trace!("reading pkt");
     let mut buf = [0u8; 1 << 16];
     let (n, addr) = socket.recv_from(&mut buf).await?;
-    let pkg = buf[0..n].to_vec();
-    trace!("read pkg: {}", hex(&pkg));
-    Ok((pkg, addr))
+    let pkt = buf[0..n].to_vec();
+    trace!("read pkt: {}", hex(&pkt));
+    Ok((pkt, addr))
 }
