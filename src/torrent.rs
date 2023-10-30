@@ -73,7 +73,12 @@ pub async fn download_torrent(
     info!("tracker response: {tracker_response:?}");
 
     let resp = match tracker_response {
-        Ok(TrackerResponse::Success(r)) => r,
+        Ok(TrackerResponse::Success(mut r)) => {
+            for p in peers {
+                r.peers.insert(p);
+            }
+            r
+        }
         e => {
             debug!("tracker error: {:?}", e);
             TrackerResponseSuccess {
