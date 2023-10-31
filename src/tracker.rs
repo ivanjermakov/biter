@@ -223,21 +223,24 @@ pub async fn tracker_request_http(
 
 pub async fn tracker_loop(state: Arc<Mutex<State>>) {
     loop {
-        let (announce, info_hash, peer_id, tracker_timeout) = {
+        let (announce, info_hash, peer_id, port, tracker_id, tracker_timeout) = {
             let state = state.lock().await;
             (
-                state.metainfo.announce.clone(),
+                state.metainfo.as_ref().cloned().map(|m| m.announce),
                 state.info_hash.clone(),
                 state.peer_id.clone(),
-                state.tracker_response.interval,
+                state.config.port,
+                state.tracker_response.clone().unwrap().tracker_id.clone(),
+                state.tracker_response.as_ref().map(|m| m.interval),
             )
         };
-        let (port, tracker_id) = {
-            let state = state.lock().await;
-            (state.config.port, state.tracker_response.tracker_id.clone())
-        };
+        if announce.is_none() || tracker_timeout.is_none() {
+            debug!("tracker not available");
+            sleep(Duration::from_secs(10)).await;
+            continue;
+        }
         let tracker_response = tracker_request(
-            announce,
+            announce.unwrap(),
             TrackerRequest::new(info_hash, peer_id, port, None, tracker_id),
         )
         .await
@@ -277,6 +280,6 @@ pub async fn tracker_loop(state: Arc<Mutex<State>>) {
         };
 
         debug!("tracker timeout is {:?}", tracker_timeout);
-        sleep(Duration::from_secs(tracker_timeout as u64)).await;
+        sleep(Duration::from_secs(tracker_timeout.unwrap() as u64)).await;
     }
 }

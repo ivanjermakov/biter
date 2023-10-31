@@ -444,33 +444,41 @@ pub async fn write_loop(
             }
         }
 
-        let piece = match state.lock().await.next_piece() {
-            Some(p) => p,
+        let next = state.lock().await.next_piece();
+        match next {
+            Some(piece) => {
+                debug!("next request piece: {:?}", piece);
+                let total_blocks = piece.total_blocks();
+
+                let block_idxs = (0..total_blocks)
+                    .filter(|i| !piece.blocks.contains_key(i))
+                    .collect::<Vec<_>>();
+                for i in block_idxs {
+                    let request_msg = Message::Request {
+                        piece_index: piece.index,
+                        begin: i * BLOCK_SIZE,
+                        length: if i == total_blocks - 1 && piece.length % BLOCK_SIZE != 0 {
+                            piece.length % BLOCK_SIZE
+                        } else {
+                            BLOCK_SIZE
+                        },
+                    };
+                    send_message(&mut stream, request_msg).await?;
+                }
+            }
             _ => {
-                debug!("no more pieces to request, disconnecting");
-                return Ok(());
+                let mut state = state.lock().await;
+                if state.status == TorrentStatus::Metainfo {
+                    // TODO
+                    info!("requesting metainfo");
+                } else {
+                    info!("torrent is downloaded");
+                    state.status = TorrentStatus::Downloaded;
+                    debug!("no more pieces to request, disconnecting");
+                    return Ok(());
+                }
             }
         };
-
-        debug!("next request piece: {:?}", piece);
-        let total_blocks = piece.total_blocks();
-
-        let block_idxs = (0..total_blocks)
-            .filter(|i| !piece.blocks.contains_key(i))
-            .collect::<Vec<_>>();
-        for i in block_idxs {
-            let request_msg = Message::Request {
-                piece_index: piece.index,
-                begin: i * BLOCK_SIZE,
-                length: if i == total_blocks - 1 && piece.length % BLOCK_SIZE != 0 {
-                    piece.length % BLOCK_SIZE
-                } else {
-                    BLOCK_SIZE
-                },
-            };
-            send_message(&mut stream, request_msg).await?;
-        }
-
         let wait = state.lock().await.config.piece_request_wait;
         sleep(wait).await;
     }
@@ -496,6 +504,11 @@ async fn read_loop(
                 begin,
                 block,
             }) => {
+                let status = state.lock().await.status.clone();
+                if status != TorrentStatus::Downloading {
+                    warn!("not accepting pieces with status {:?}", status);
+                    continue;
+                }
                 if begin % BLOCK_SIZE != 0 {
                     warn!("block begin is not a multiple of block size");
                     continue;
@@ -504,14 +517,14 @@ async fn read_loop(
 
                 {
                     let mut state = state.lock().await;
-                    let piece = match state.pieces.get_mut(&piece_index) {
+                    let piece = match state.pieces.as_mut().unwrap().get_mut(&piece_index) {
                         Some(p) => p,
                         _ => {
                             debug!("no piece with index {:?}", piece_index);
                             continue;
                         }
                     };
-                    if piece.status != TorrentStatus::Started {
+                    if piece.status != TorrentStatus::Downloading {
                         debug!("downloaded block of already completed piece, loss");
                         continue;
                     }
@@ -543,20 +556,32 @@ async fn read_loop(
                             "piece {}/{}/{}",
                             state
                                 .pieces
+                                .as_ref()
+                                .unwrap()
                                 .values()
-                                .filter(|p| p.status != TorrentStatus::Started)
+                                .filter(|p| p.status != TorrentStatus::Downloading)
                                 .count(),
                             state
                                 .pieces
+                                .as_ref()
+                                .unwrap()
                                 .values()
-                                .filter(|p| p.status > TorrentStatus::Started)
+                                .filter(|p| p.status > TorrentStatus::Downloading)
                                 .count(),
-                            state.pieces.len(),
+                            state.pieces.as_ref().unwrap().len(),
                         );
                     }
                 }
 
-                if state.lock().await.pieces.get(&piece_index).unwrap().status
+                if state
+                    .lock()
+                    .await
+                    .pieces
+                    .as_ref()
+                    .unwrap()
+                    .get(&piece_index)
+                    .unwrap()
+                    .status
                     == TorrentStatus::Downloaded
                 {
                     // TODO: async

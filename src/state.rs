@@ -18,34 +18,30 @@ pub const BLOCK_SIZE: u32 = 1 << 14;
 #[derive(Clone, Debug, PartialEq)]
 pub struct State {
     pub config: Config,
-    pub metainfo: Metainfo,
-    pub tracker_response: TrackerResponseSuccess,
     pub info_hash: Vec<u8>,
     pub peer_id: Vec<u8>,
-    pub pieces: BTreeMap<u32, Piece>,
     pub peers: BTreeMap<PeerInfo, Peer>,
     pub status: TorrentStatus,
+    pub metainfo: Option<Metainfo>,
+    pub tracker_response: Option<TrackerResponseSuccess>,
+    pub pieces: Option<BTreeMap<u32, Piece>>,
 }
 
 impl State {
     pub fn next_piece(&mut self) -> Option<Piece> {
-        let piece = self
-            .pieces
+        self.pieces
+            .as_ref()?
             .values()
-            .filter(|p| p.status == TorrentStatus::Started)
+            .filter(|p| p.status == TorrentStatus::Downloading)
             .choose(&mut thread_rng())
-            .cloned();
-        if piece.is_none() {
-            debug!("torrent is downloaded");
-            self.status = TorrentStatus::Downloaded;
-        }
-        piece
+            .cloned()
     }
 }
 
 #[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
 pub enum TorrentStatus {
-    Started,
+    Metainfo,
+    Downloading,
     Downloaded,
     Saved,
 }
@@ -214,7 +210,7 @@ pub fn init_pieces(info: &Info) -> BTreeMap<u32, Piece> {
                     index: i as u32,
                     length: length as u32,
                     blocks: BTreeMap::new(),
-                    status: TorrentStatus::Started,
+                    status: TorrentStatus::Downloading,
                     file_locations,
                 },
             )]

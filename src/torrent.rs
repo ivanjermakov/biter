@@ -19,9 +19,7 @@ use crate::{
     persist::PersistState,
     sha1,
     state::{init_pieces, Peer, PeerInfo, State, TorrentStatus},
-    tracker::{
-        tracker_loop, tracker_request, TrackerEvent, TrackerRequest, TrackerResponseSuccess,
-    },
+    tracker::tracker_loop,
 };
 
 pub fn get_info_hash(value: &BencodeValue) -> Result<ByteString> {
@@ -57,38 +55,19 @@ pub async fn download_torrent(
     .await?;
     info!("discovered {} dht peers", peers.len());
 
-    let tracker_response = tracker_request(
-        metainfo.announce.clone(),
-        TrackerRequest::new(
-            info_hash.clone(),
-            p_state.lock().await.peer_id.to_vec(),
-            config.port,
-            Some(TrackerEvent::Started),
-            None,
-        ),
-    )
-    .await
-    .context("request failed");
-    info!("tracker response: {tracker_response:?}");
-
-    let resp = TrackerResponseSuccess {
-        peers,
-        interval: 30,
-        ..Default::default()
-    };
+    let pieces = init_pieces(&metainfo.info);
     let state = State {
         config: config.clone(),
-        metainfo: metainfo.clone(),
-        tracker_response: resp.clone(),
+        metainfo: Some(metainfo),
+        tracker_response: None,
         info_hash,
         peer_id: p_state.lock().await.peer_id.to_vec(),
-        pieces: init_pieces(&metainfo.info),
-        peers: resp
-            .peers
+        pieces: Some(pieces),
+        peers: peers
             .into_iter()
             .map(|p| (p.clone(), Peer::new(p)))
             .collect(),
-        status: TorrentStatus::Started,
+        status: TorrentStatus::Downloading,
     };
     let state = Arc::new(Mutex::new(state));
     trace!("init state: {:?}", state);
@@ -104,11 +83,13 @@ pub async fn download_torrent(
     let state = state.lock().await;
     debug!("verifying downloaded pieces");
     ensure!(
-        state.pieces.len() == state.metainfo.info.pieces.len(),
+        state.pieces.as_ref().unwrap().len() == state.metainfo.as_ref().unwrap().info.pieces.len(),
         "pieces length mismatch"
     );
     let incomplete = state
         .pieces
+        .as_ref()
+        .unwrap()
         .values()
         .filter(|p| p.status != TorrentStatus::Saved)
         .count();
@@ -140,12 +121,26 @@ pub async fn write_piece(piece_idx: u32, state: Arc<Mutex<State>>) -> Result<()>
         state.metainfo.clone()
     };
     // TODO: drain data instead of cloning
-    let piece = { state.lock().await.pieces.get(&piece_idx).cloned().unwrap() };
+    let piece = {
+        state
+            .lock()
+            .await
+            .pieces
+            .as_ref()
+            .unwrap()
+            .get(&piece_idx)
+            .cloned()
+            .unwrap()
+    };
     debug!("writing piece: {:?}", piece.file_locations);
     for f in piece.file_locations {
         let path = PathBuf::from("download")
-            .join(&metainfo.info.name)
-            .join(metainfo.info.file_info.files()[f.file_index].path.clone());
+            .join(&metainfo.as_ref().unwrap().info.name)
+            .join(
+                metainfo.as_ref().unwrap().info.file_info.files()[f.file_index]
+                    .path
+                    .clone(),
+            );
         tokio::fs::create_dir_all(&path.parent().context("no parent")?).await?;
         let data = piece
             .blocks
@@ -166,7 +161,7 @@ pub async fn write_piece(piece_idx: u32, state: Arc<Mutex<State>>) -> Result<()>
         file.write_all(&data).await?;
 
         let mut state = state.lock().await;
-        let p = state.pieces.get_mut(&piece_idx).unwrap();
+        let p = state.pieces.as_mut().unwrap().get_mut(&piece_idx).unwrap();
         p.status = TorrentStatus::Saved;
         p.blocks.clear();
     }
