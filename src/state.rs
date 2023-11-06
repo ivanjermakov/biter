@@ -7,8 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     config::Config,
+    extension::Extension,
     hex::hex,
     metainfo::{Info, Metainfo},
+    peer_metainfo::MetainfoState,
     tracker::TrackerResponseSuccess,
     types::ByteString,
 };
@@ -22,7 +24,7 @@ pub struct State {
     pub peer_id: Vec<u8>,
     pub peers: BTreeMap<PeerInfo, Peer>,
     pub status: TorrentStatus,
-    pub metainfo: Option<Metainfo>,
+    pub metainfo: Result<Metainfo, MetainfoState>,
     pub tracker_response: Option<TrackerResponseSuccess>,
     pub pieces: Option<BTreeMap<u32, Piece>>,
 }
@@ -59,7 +61,7 @@ pub struct Piece {
 
 impl Piece {
     pub fn total_blocks(&self) -> u32 {
-        (self.length as f64 / BLOCK_SIZE as f64).ceil() as u32
+        self.length.div_ceil(BLOCK_SIZE)
     }
 }
 
@@ -91,6 +93,7 @@ pub struct Peer {
     pub interested: bool,
     pub bitfield: Option<Vec<u8>>,
     pub dht_port: Option<u16>,
+    pub extension_map: BTreeMap<Extension, u8>,
 }
 
 impl Peer {
@@ -104,6 +107,7 @@ impl Peer {
             interested: false,
             bitfield: None,
             dht_port: None,
+            extension_map: BTreeMap::new(),
         }
     }
 }
@@ -155,11 +159,11 @@ pub fn init_pieces(info: &Info) -> BTreeMap<u32, Piece> {
         })
         .collect::<Vec<_>>();
     let total_len = info.file_info.total_length();
-    if info.pieces.len() != (total_len as f64 / info.piece_length as f64).ceil() as usize {
+    if info.pieces.len() != total_len.div_ceil(info.piece_length) as usize {
         warn!(
             "total length/piece size/piece count inconsistent: {} info pieces, {} expected",
             info.pieces.len(),
-            (total_len as f64 / info.piece_length as f64).ceil()
+            total_len.div_ceil(info.piece_length)
         );
     }
     info.pieces

@@ -223,63 +223,65 @@ pub async fn tracker_request_http(
 
 pub async fn tracker_loop(state: Arc<Mutex<State>>) {
     loop {
-        let (announce, info_hash, peer_id, port, tracker_id, tracker_timeout) = {
+        if let (Some(announce), info_hash, peer_id, port, Some(tracker_id), Some(tracker_timeout)) = {
             let state = state.lock().await;
             (
-                state.metainfo.as_ref().cloned().map(|m| m.announce),
+                state.metainfo.clone().ok().and_then(|m| m.announce),
                 state.info_hash.clone(),
                 state.peer_id.clone(),
                 state.config.port,
-                state.tracker_response.clone().unwrap().tracker_id.clone(),
-                state.tracker_response.as_ref().map(|m| m.interval),
+                state
+                    .tracker_response
+                    .as_ref()
+                    .map(|r| r.tracker_id.clone()),
+                state.tracker_response.as_ref().map(|r| r.interval),
             )
-        };
-        if announce.is_none() || tracker_timeout.is_none() {
-            debug!("tracker not available");
-            sleep(Duration::from_secs(10)).await;
-            continue;
-        }
-        let tracker_response = tracker_request(
-            announce.unwrap(),
-            TrackerRequest::new(info_hash, peer_id, port, None, tracker_id),
-        )
-        .await
-        .context("request failed");
-        info!("tracker response: {tracker_response:?}");
+        } {
+            let tracker_response = tracker_request(
+                announce,
+                TrackerRequest::new(info_hash, peer_id, port, None, tracker_id),
+            )
+            .await
+            .context("request failed");
+            info!("tracker response: {tracker_response:?}");
 
-        // TODO: in case of error, try trackers from announce-list
-        match tracker_response {
-            Ok(TrackerResponse::Success(resp)) => {
-                let mut state = state.lock().await;
-                let new_peers: Vec<_> = resp
-                    .peers
-                    .into_iter()
-                    .filter(|p| !state.peers.contains_key(p))
-                    .map(Peer::new)
-                    .collect();
-                info!("received {} new peers", new_peers.len());
-                for p in new_peers {
-                    state.peers.insert(p.info.clone(), p);
-                }
-                info!(
-                    "total {} peers, {} connected",
-                    state.peers.len(),
-                    state
+            // TODO: in case of error, try trackers from announce-list
+            match tracker_response {
+                Ok(TrackerResponse::Success(resp)) => {
+                    let mut state = state.lock().await;
+                    let new_peers: Vec<_> = resp
                         .peers
-                        .values()
-                        .filter(|p| p.status == PeerStatus::Connected)
-                        .count()
-                );
-            }
-            Ok(TrackerResponse::Failure { failure_reason }) => {
-                debug!("tracker failure: {}", failure_reason);
-            }
-            Err(e) => {
-                debug!("{e:#}");
-            }
-        };
-
-        debug!("tracker timeout is {:?}", tracker_timeout);
-        sleep(Duration::from_secs(tracker_timeout.unwrap() as u64)).await;
+                        .into_iter()
+                        .filter(|p| !state.peers.contains_key(p))
+                        .map(Peer::new)
+                        .collect();
+                    info!("received {} new peers", new_peers.len());
+                    for p in new_peers {
+                        state.peers.insert(p.info.clone(), p);
+                    }
+                    info!(
+                        "total {} peers, {} connected",
+                        state.peers.len(),
+                        state
+                            .peers
+                            .values()
+                            .filter(|p| p.status == PeerStatus::Connected)
+                            .count()
+                    );
+                }
+                Ok(TrackerResponse::Failure { failure_reason }) => {
+                    debug!("tracker failure: {}", failure_reason);
+                }
+                Err(e) => {
+                    debug!("{e:#}");
+                }
+            };
+            debug!("tracker timeout is {:?}", tracker_timeout);
+            sleep(Duration::from_secs(tracker_timeout as u64)).await;
+        } else {
+            let timeout = Duration::from_secs(10);
+            debug!("tracker not available, timeout is {:?}", timeout);
+            sleep(timeout).await;
+        }
     }
 }

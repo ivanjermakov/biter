@@ -1,12 +1,14 @@
 use core::fmt;
 use std::path::PathBuf;
 
+use anyhow::{Error, Result};
+
 use crate::{bencode::BencodeValue, state::PieceHash};
 
 #[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
 pub struct Metainfo {
     pub info: Info,
-    pub announce: String,
+    pub announce: Option<String>,
     pub announce_list: Option<Vec<Vec<String>>>,
     pub creation_date: Option<i64>,
     pub comment: Option<String>,
@@ -64,24 +66,24 @@ pub struct PathInfo {
 }
 
 impl TryFrom<BencodeValue> for Metainfo {
-    type Error = String;
+    type Error = Error;
 
     fn try_from(value: BencodeValue) -> Result<Self, Self::Error> {
         let dict = match value {
             BencodeValue::Dict(d) => d,
-            _ => return Err("metafile is not a dict".into()),
+            _ => return Err(Error::msg("metafile is not a dict")),
         };
         let info_dict = match dict.get("info") {
             Some(BencodeValue::Dict(d)) => d,
-            _ => return Err("'info' is not a dict".into()),
+            _ => return Err(Error::msg("'info' is not a dict")),
         };
         let pieces: Vec<PieceHash> = match info_dict.get("pieces") {
             Some(BencodeValue::String(s)) => s.chunks(20).map(|c| PieceHash(c.to_vec())).collect(),
-            _ => return Err("'pieces' missing".into()),
+            _ => return Err(Error::msg("'pieces' missing")),
         };
         let name: String = match info_dict.get("name") {
             Some(BencodeValue::String(s)) => String::from_utf8_lossy(s).into(),
-            _ => return Err("'name' missing".into()),
+            _ => return Err(Error::msg("'name' missing")),
         };
         let file_info = match info_dict.get("files") {
             Some(d) => FileInfo::Multi(parse_files_info(d)?),
@@ -89,7 +91,7 @@ impl TryFrom<BencodeValue> for Metainfo {
                 path: PathBuf::from(&name),
                 length: match info_dict.get("length") {
                     Some(BencodeValue::Int(v)) => *v as u64,
-                    _ => return Err("'length' missing".into()),
+                    _ => return Err(Error::msg("'length' missing")),
                 },
                 md5_sum: match info_dict.get("md5_sum") {
                     Some(BencodeValue::String(s)) => Some(String::from_utf8_lossy(s).to_string()),
@@ -101,7 +103,7 @@ impl TryFrom<BencodeValue> for Metainfo {
             info: Info {
                 piece_length: match info_dict.get("piece length") {
                     Some(BencodeValue::Int(v)) => *v as u64,
-                    _ => return Err("'piece length' missing".into()),
+                    _ => return Err(Error::msg("'piece length' missing")),
                 },
                 pieces,
                 name,
@@ -112,8 +114,8 @@ impl TryFrom<BencodeValue> for Metainfo {
                 },
             },
             announce: match dict.get("announce") {
-                Some(BencodeValue::String(s)) => String::from_utf8_lossy(s).into(),
-                _ => return Err("'announce' missing".into()),
+                Some(BencodeValue::String(s)) => Some(String::from_utf8_lossy(s).into()),
+                _ => None,
             },
             announce_list: match dict.get("announce-list") {
                 Some(BencodeValue::List(l)) => l
@@ -152,7 +154,7 @@ impl TryFrom<BencodeValue> for Metainfo {
     }
 }
 
-fn parse_files_info(value: &BencodeValue) -> Result<Vec<PathInfo>, String> {
+fn parse_files_info(value: &BencodeValue) -> Result<Vec<PathInfo>> {
     match value {
         BencodeValue::List(l) => l
             .iter()
@@ -165,15 +167,15 @@ fn parse_files_info(value: &BencodeValue) -> Result<Vec<PathInfo>, String> {
                                 BencodeValue::String(dir) => {
                                     Ok(PathBuf::from(String::from_utf8_lossy(dir).to_string()))
                                 }
-                                _ => Err("'path' item is not a string".into()),
+                                _ => Err(Error::msg("'path' item is not a string")),
                             })
-                            .collect::<Result<PathBuf, String>>()?,
-                        _ => return Err("'path' is not a list".into()),
+                            .collect::<Result<_, _>>()?,
+                        _ => return Err(Error::msg("'path' is not a list")),
                     };
                     Ok(PathInfo {
                         length: match d.get("length") {
                             Some(BencodeValue::Int(v)) => *v as u64,
-                            _ => return Err("'length' missing".into()),
+                            _ => return Err(Error::msg("'length' missing")),
                         },
                         path,
                         md5_sum: match d.get("md5_sum") {
@@ -184,9 +186,9 @@ fn parse_files_info(value: &BencodeValue) -> Result<Vec<PathInfo>, String> {
                         },
                     })
                 }
-                _ => Err("'files' item is not a dict".into()),
+                _ => Err(Error::msg("'files' item is not a dict")),
             })
             .collect(),
-        _ => Err("'files' is not a list".into()),
+        _ => Err(Error::msg("'files' is not a list")),
     }
 }

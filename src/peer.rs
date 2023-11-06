@@ -17,13 +17,15 @@ use crate::{
     extension::Extension,
     feature::Feature,
     hex::hex,
+    metainfo::Metainfo,
+    peer_metainfo::{PeerMetainfoMessage, METAINFO_PIECE_SIZE},
     sha1,
     state::{Block, Peer, PeerInfo, PeerStatus, State, TorrentStatus, BLOCK_SIZE},
     torrent::write_piece,
     types::ByteString,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Message {
     Handshake {
         info_hash: Vec<u8>,
@@ -61,7 +63,7 @@ pub enum Message {
     },
     Extended {
         ext_id: u8,
-        payload: Option<BencodeValue>,
+        payload: Option<ByteString>,
     },
 }
 
@@ -129,7 +131,7 @@ impl From<Message> for Vec<u8> {
             .concat(),
             Message::Port { port } => [u32tb(3).as_slice(), &[9], &port.to_be_bytes()].concat(),
             Message::Extended { ext_id, payload } => {
-                let p = payload.map(|p| p.encode()).unwrap_or_default();
+                let p = payload.unwrap_or_default();
                 [u32tb(p.len() as u32 + 2).as_slice(), &[20], &[ext_id], &p].concat()
             }
         }
@@ -276,12 +278,10 @@ pub async fn read_message(stream: &mut OwnedReadHalf) -> Result<Message> {
                 }),
                 20 => {
                     let ext_id = payload_p[0];
-                    let payload = match &payload_p[1..] {
-                        &[] => None,
-                        p => match parse_bencoded(p.to_vec()) {
-                            (Some(v @ BencodeValue::Dict(..)), left) if left.is_empty() => Some(v),
-                            _ => None,
-                        },
+                    let payload = if payload_p.len() == 1 {
+                        None
+                    } else {
+                        Some(payload_p[1..].to_vec())
                     };
                     Ok(Message::Extended { ext_id, payload })
                 }
@@ -400,7 +400,7 @@ pub async fn do_handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<
             &mut w_stream,
             Message::Extended {
                 ext_id: 0,
-                payload: Some(Extension::handshake(&[Extension::Metadata])),
+                payload: Some(Extension::handshake(&[Extension::Metadata]).encode()),
             },
         )
         .await?;
@@ -428,57 +428,101 @@ pub async fn write_loop(
     state: Arc<Mutex<State>>,
 ) -> Result<()> {
     loop {
-        {
-            let (config, p) = {
-                let state = state.lock().await;
-                (state.config.clone(), state.peers.get(&peer).cloned())
-            };
-            if config.respect_choke {
-                if let Some(p) = p {
-                    if p.choked {
-                        debug!("peer is choked, waiting");
-                        sleep(config.choke_wait).await;
-                        continue;
-                    }
-                }
-            }
+        let (config, p) = {
+            let state = state.lock().await;
+            (
+                state.config.clone(),
+                state.peers.get(&peer).cloned().context("no peer")?,
+            )
+        };
+        if config.respect_choke && p.choked {
+            debug!("peer is choked, waiting");
+            sleep(config.choke_wait).await;
+            continue;
         }
 
-        let next = state.lock().await.next_piece();
-        match next {
-            Some(piece) => {
-                debug!("next request piece: {:?}", piece);
-                let total_blocks = piece.total_blocks();
-
-                let block_idxs = (0..total_blocks)
-                    .filter(|i| !piece.blocks.contains_key(i))
-                    .collect::<Vec<_>>();
-                for i in block_idxs {
-                    let request_msg = Message::Request {
-                        piece_index: piece.index,
-                        begin: i * BLOCK_SIZE,
-                        length: if i == total_blocks - 1 && piece.length % BLOCK_SIZE != 0 {
-                            piece.length % BLOCK_SIZE
+        let status = state.lock().await.status.clone();
+        match status {
+            TorrentStatus::Metainfo => {
+                if let Some(ext_id) = p.extension_map.get(&Extension::Metadata).copied() {
+                    let metainfo = state.lock().await.metainfo.clone();
+                    if let Err(m_state) = metainfo {
+                        if let Some(i) = m_state.next_piece() {
+                            debug!("requesting metainfo piece {}", i);
+                            let msg = Message::Extended {
+                                ext_id,
+                                payload: Some(PeerMetainfoMessage::Request { piece: i }.into()),
+                            };
+                            let v: Vec<u8> = PeerMetainfoMessage::Request { piece: i }.into();
+                            trace!("msg: {}, {}", hex(&v), String::from_utf8_lossy(&v));
+                            send_message(&mut stream, msg).await?;
                         } else {
-                            BLOCK_SIZE
-                        },
+                            debug!("all metainfo pieces downloaded");
+                            let mut state = state.lock().await;
+                            let data = m_state
+                                .pieces
+                                .into_values()
+                                .flat_map(|b| b.0)
+                                .collect::<Vec<_>>();
+                            if let (Some(info_dict), _) = parse_bencoded(data) {
+                                debug!("bencoded metainfo: {:?}", info_dict);
+                                // since peer metainfo protocol only transfers info dict, it needs
+                                // to be inserted into full metainfo dict
+                                let metainfo_dict = BencodeValue::Dict(
+                                    [("info".into(), info_dict)].into_iter().collect(),
+                                );
+                                match Metainfo::try_from(metainfo_dict) {
+                                    Ok(metainfo) => {
+                                        state.metainfo = Ok(metainfo);
+                                        info!("metainfo is downloaded: {:?}", state.metainfo);
+                                        state.status = TorrentStatus::Downloading;
+                                    }
+                                    Err(e) => {
+                                        panic!("unable to parse metainfo from bencoded: {:#}", e);
+                                    }
+                                }
+                            } else {
+                                warn!("unable to parse bencoded metainfo");
+                            }
+                        }
+                    } else {
+                        unreachable!("metainfo not available");
                     };
-                    send_message(&mut stream, request_msg).await?;
                 }
             }
-            _ => {
-                let mut state = state.lock().await;
-                if state.status == TorrentStatus::Metainfo {
-                    // TODO
-                    info!("requesting metainfo");
+            TorrentStatus::Downloading => {
+                let piece = state.lock().await.next_piece();
+                if let Some(piece) = piece {
+                    debug!("next request piece: {:?}", piece);
+                    let total_blocks = piece.total_blocks();
+
+                    let block_idxs = (0..total_blocks)
+                        .filter(|i| !piece.blocks.contains_key(i))
+                        .collect::<Vec<_>>();
+                    for i in block_idxs {
+                        let request_msg = Message::Request {
+                            piece_index: piece.index,
+                            begin: i * BLOCK_SIZE,
+                            length: if i == total_blocks - 1 && piece.length % BLOCK_SIZE != 0 {
+                                piece.length % BLOCK_SIZE
+                            } else {
+                                BLOCK_SIZE
+                            },
+                        };
+                        send_message(&mut stream, request_msg).await?;
+                    }
                 } else {
                     info!("torrent is downloaded");
-                    state.status = TorrentStatus::Downloaded;
-                    debug!("no more pieces to request, disconnecting");
+                    state.lock().await.status = TorrentStatus::Downloaded;
+                    debug!("nothing else to do, disconnecting");
                     return Ok(());
                 }
             }
-        };
+            _ => {
+                debug!("nothing else to do, disconnecting");
+                return Ok(());
+            }
+        }
         let wait = state.lock().await.config.piece_request_wait;
         sleep(wait).await;
     }
@@ -506,7 +550,7 @@ async fn read_loop(
             }) => {
                 let status = state.lock().await.status.clone();
                 if status != TorrentStatus::Downloading {
-                    warn!("not accepting pieces with status {:?}", status);
+                    debug!("not accepting pieces with status {:?}", status);
                     continue;
                 }
                 if begin % BLOCK_SIZE != 0 {
@@ -598,8 +642,76 @@ async fn read_loop(
                 }
                 _ => debug!("no peer {:?}", peer),
             },
-            Ok(Message::Extended { ext_id, payload }) => {
-                debug!("got extended message: {}@{:?}", ext_id, payload);
+            Ok(Message::Extended {
+                ext_id,
+                payload: Some(payload),
+            }) => {
+                trace!("got extended message: #{}", ext_id,);
+                match ext_id {
+                    0 => {
+                        debug!("got extended handshake");
+                        if let Some(BencodeValue::Dict(dict)) = parse_bencoded(payload).0 {
+                            match dict.get("m") {
+                                Some(BencodeValue::Dict(m_d)) => {
+                                    let ext_map = m_d
+                                        .iter()
+                                        .filter_map(|(k, v)| {
+                                            let ext = Extension::try_from(k.as_str()).ok()?;
+                                            let num = match v {
+                                                BencodeValue::Int(i) => *i as u8,
+                                                _ => {
+                                                    return Err(Error::msg("ext id is not an int"))
+                                                        .ok()
+                                                }
+                                            };
+                                            Some((ext, num))
+                                        })
+                                        .collect();
+                                    state
+                                        .lock()
+                                        .await
+                                        .peers
+                                        .get_mut(&peer)
+                                        .context("no peer")?
+                                        .extension_map = ext_map;
+                                }
+                                _ => debug!("no `m` key"),
+                            }
+                        };
+                    }
+                    _ => match Extension::try_from(ext_id as usize) {
+                        Ok(Extension::Metadata) => match PeerMetainfoMessage::try_from(payload) {
+                            Ok(msg) => {
+                                debug!("got metadata message {:?}", msg);
+                                match msg {
+                                    PeerMetainfoMessage::Data {
+                                        piece,
+                                        total_size,
+                                        data,
+                                    } => {
+                                        let mut state = state.lock().await;
+                                        if let Err(m_state) = state.metainfo.as_mut() {
+                                            m_state.pieces.insert(piece, data);
+                                            m_state.total_size = Some(total_size);
+                                            debug!(
+                                                "new metainfo piece {}/{}",
+                                                m_state.pieces.len(),
+                                                total_size.div_ceil(METAINFO_PIECE_SIZE)
+                                            );
+                                        } else {
+                                            debug!("metainfo already set");
+                                        }
+                                    }
+                                    _ => {
+                                        debug!("unhandled metadata message {:?}", msg);
+                                    }
+                                }
+                            }
+                            Err(e) => debug!("{e:#}"),
+                        },
+                        Err(..) => debug!("unsupported extension id: #{}", ext_id),
+                    },
+                }
             }
             Ok(msg) => {
                 debug!("no handler for message, skipping: {:?}", msg);

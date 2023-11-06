@@ -8,6 +8,7 @@ use tokio::fs::File;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::{spawn, sync::Mutex};
 
+use crate::peer_metainfo::MetainfoState;
 use crate::types::ByteString;
 use crate::{
     abort::EnsureAbort,
@@ -55,19 +56,18 @@ pub async fn download_torrent(
     .await?;
     info!("discovered {} dht peers", peers.len());
 
-    let pieces = init_pieces(&metainfo.info);
     let state = State {
         config: config.clone(),
-        metainfo: Some(metainfo),
+        metainfo: Err(MetainfoState::default()),
         tracker_response: None,
         info_hash,
         peer_id: p_state.lock().await.peer_id.to_vec(),
-        pieces: Some(pieces),
+        pieces: Some(init_pieces(&metainfo.info)),
         peers: peers
             .into_iter()
             .map(|p| (p.clone(), Peer::new(p)))
             .collect(),
-        status: TorrentStatus::Downloading,
+        status: TorrentStatus::Metainfo,
     };
     let state = Arc::new(Mutex::new(state));
     trace!("init state: {:?}", state);
