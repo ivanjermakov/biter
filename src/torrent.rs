@@ -19,7 +19,7 @@ use crate::{
     peer::peer_loop,
     persist::PersistState,
     sha1,
-    state::{init_pieces, Peer, PeerInfo, State, TorrentStatus},
+    state::{Peer, PeerInfo, State, TorrentStatus},
     tracker::tracker_loop,
 };
 
@@ -38,7 +38,7 @@ pub async fn download_torrent(
     p_state: Arc<Mutex<PersistState>>,
 ) -> Result<()> {
     let started = Instant::now();
-    let (metainfo, info_hash) = metainfo_from_path(path)?;
+    let (_, info_hash) = metainfo_from_path(path)?;
     let (dht_peers, peer_id) = {
         let p_state = p_state.lock().await;
         (
@@ -62,7 +62,7 @@ pub async fn download_torrent(
         tracker_response: None,
         info_hash,
         peer_id: p_state.lock().await.peer_id.to_vec(),
-        pieces: Some(init_pieces(&metainfo.info)),
+        pieces: None,
         peers: peers
             .into_iter()
             .map(|p| (p.clone(), Peer::new(p)))

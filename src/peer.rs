@@ -20,7 +20,7 @@ use crate::{
     metainfo::Metainfo,
     peer_metainfo::{PeerMetainfoMessage, METAINFO_PIECE_SIZE},
     sha1,
-    state::{Block, Peer, PeerInfo, PeerStatus, State, TorrentStatus, BLOCK_SIZE},
+    state::{init_pieces, Block, Peer, PeerInfo, PeerStatus, State, TorrentStatus, BLOCK_SIZE},
     torrent::write_piece,
     types::ByteString,
 };
@@ -467,15 +467,16 @@ pub async fn write_loop(
                             if let (Some(info_dict), _) = parse_bencoded(data) {
                                 debug!("bencoded metainfo: {:?}", info_dict);
                                 // since peer metainfo protocol only transfers info dict, it needs
-                                // to be inserted into full metainfo dict
+                                // to be inserted into full metainfo dict to parse properly
                                 let metainfo_dict = BencodeValue::Dict(
                                     [("info".into(), info_dict)].into_iter().collect(),
                                 );
                                 match Metainfo::try_from(metainfo_dict) {
                                     Ok(metainfo) => {
+                                        state.pieces = Some(init_pieces(&metainfo.info));
                                         state.metainfo = Ok(metainfo);
-                                        info!("metainfo is downloaded: {:?}", state.metainfo);
                                         state.status = TorrentStatus::Downloading;
+                                        info!("metainfo is downloaded: {:?}", state.metainfo);
                                     }
                                     Err(e) => {
                                         panic!("unable to parse metainfo from bencoded: {:#}", e);
@@ -597,14 +598,7 @@ async fn read_loop(
                         }
                         piece.status = TorrentStatus::Downloaded;
                         info!(
-                            "piece {}/{}/{}",
-                            state
-                                .pieces
-                                .as_ref()
-                                .unwrap()
-                                .values()
-                                .filter(|p| p.status != TorrentStatus::Downloading)
-                                .count(),
+                            "piece {}/{}",
                             state
                                 .pieces
                                 .as_ref()
