@@ -1,13 +1,18 @@
 #[macro_use]
 extern crate log;
 
-use anyhow::{Error, Result};
+use anyhow::{Context, Error, Result};
 use expanduser::expanduser;
+use reqwest::Url;
 use std::{collections::BTreeSet, env, path::PathBuf, process, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
 use crate::{
-    config::Config, peer::generate_peer_id, persist::PersistState, torrent::download_torrent,
+    config::Config,
+    hex::from_hex,
+    peer::generate_peer_id,
+    persist::PersistState,
+    torrent::{download_torrent, metainfo_from_path},
 };
 
 mod abort;
@@ -42,9 +47,9 @@ async fn try_main() -> Result<()> {
         env_logger::Env::default().filter_or(env_logger::DEFAULT_FILTER_ENV, "info"),
     );
 
-    let path = match env::args().nth(1) {
-        Some(arg) => PathBuf::from(arg),
-        _ => return Err(Error::msg("no torrent file specified")),
+    let arg = match env::args().nth(1) {
+        Some(arg) => arg,
+        _ => return Err(Error::msg("no torrent file/magnet specified")),
     };
 
     let config = Config {
@@ -70,7 +75,27 @@ async fn try_main() -> Result<()> {
     debug!("read persist state from file: {:?}", p_state);
     let p_state = Arc::new(Mutex::new(p_state));
 
-    download_torrent(&path, &config, p_state).await?;
+    if arg.starts_with("magnet:") {
+        debug!("parsing magnet: {}", arg);
+        let uri = Url::parse(&arg).context("magnet uri parsing error")?;
+        let xt = uri
+            .query_pairs()
+            .find(|(k, _)| k == "xt")
+            .context("no `info_hash` query param")?
+            .1
+            .to_string();
+        trace!("xt: {}", xt);
+        let info_hash = xt
+            .split("urn:btih:")
+            .last()
+            .context("invalid magnet")?
+            .to_lowercase();
+        info!("magnet info hash: {}", info_hash);
+        download_torrent(from_hex(&info_hash), None, &config, p_state).await?;
+    } else {
+        let (info_hash, metainfo) = metainfo_from_path(&PathBuf::from(arg))?;
+        download_torrent(info_hash, Some(metainfo), &config, p_state).await?;
+    }
 
     Ok(())
 }

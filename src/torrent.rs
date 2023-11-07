@@ -8,7 +8,9 @@ use tokio::fs::File;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::{spawn, sync::Mutex};
 
+use crate::hex::hex;
 use crate::peer_metainfo::MetainfoState;
+use crate::state::init_pieces;
 use crate::types::ByteString;
 use crate::{
     abort::EnsureAbort,
@@ -23,22 +25,13 @@ use crate::{
     tracker::tracker_loop,
 };
 
-pub fn get_info_hash(value: &BencodeValue) -> Result<ByteString> {
-    if let BencodeValue::Dict(d) = value {
-        let str = d.get("info").context("no 'info' key")?.encode();
-        Ok(sha1::encode(str))
-    } else {
-        Err(Error::msg("value is not a dict"))
-    }
-}
-
 pub async fn download_torrent(
-    path: &Path,
+    info_hash: ByteString,
+    metainfo: Option<Metainfo>,
     config: &Config,
     p_state: Arc<Mutex<PersistState>>,
 ) -> Result<()> {
     let started = Instant::now();
-    let (_, info_hash) = metainfo_from_path(path)?;
     let (dht_peers, peer_id) = {
         let p_state = p_state.lock().await;
         (
@@ -56,18 +49,24 @@ pub async fn download_torrent(
     .await?;
     info!("discovered {} dht peers", peers.len());
 
+    let pieces = metainfo.as_ref().map(|m| init_pieces(&m.info));
+    let status = if metainfo.is_some() {
+        TorrentStatus::Downloading
+    } else {
+        TorrentStatus::Metainfo
+    };
     let state = State {
         config: config.clone(),
-        metainfo: Err(MetainfoState::default()),
+        metainfo: metainfo.ok_or(MetainfoState::default()),
         tracker_response: None,
         info_hash,
         peer_id: p_state.lock().await.peer_id.to_vec(),
-        pieces: None,
+        pieces,
         peers: peers
             .into_iter()
             .map(|p| (p.clone(), Peer::new(p)))
             .collect(),
-        status: TorrentStatus::Metainfo,
+        status,
     };
     let state = Arc::new(Mutex::new(state));
     trace!("init state: {:?}", state);
@@ -168,24 +167,33 @@ pub async fn write_piece(piece_idx: u32, state: Arc<Mutex<State>>) -> Result<()>
     Ok(())
 }
 
-pub fn metainfo_from_path(path: &Path) -> Result<(Metainfo, ByteString)> {
+pub fn metainfo_from_path(path: &Path) -> Result<(ByteString, Metainfo)> {
     debug!("reading torrent file: {:?}", path);
     let bencoded = fs::read(path).context("no metadata file")?;
     metainfo_from_str(bencoded)
 }
 
-pub fn metainfo_from_str(bencoded: ByteString) -> Result<(Metainfo, ByteString)> {
+pub fn metainfo_from_str(bencoded: ByteString) -> Result<(ByteString, Metainfo)> {
     let metainfo_dict = match parse_bencoded(bencoded) {
         (Some(metadata), left) if left.is_empty() => metadata,
         _ => return Err(Error::msg("metadata file parsing error")),
     };
     debug!("metainfo dict: {metainfo_dict:?}");
     let info_hash = get_info_hash(&metainfo_dict)?;
-    info!("info hash: {info_hash:?}");
+    info!("info hash: {}", hex(&info_hash));
     let metainfo = match Metainfo::try_from(metainfo_dict) {
         Ok(info) => info,
         Err(e) => return Err(Error::msg(e).context("metadata file structure error")),
     };
     info!("metainfo: {metainfo:?}");
-    Ok((metainfo, info_hash))
+    Ok((info_hash, metainfo))
+}
+
+pub fn get_info_hash(value: &BencodeValue) -> Result<ByteString> {
+    if let BencodeValue::Dict(d) = value {
+        let str = d.get("info").context("no 'info' key")?.encode();
+        Ok(sha1::encode(str))
+    } else {
+        Err(Error::msg("value is not a dict"))
+    }
 }
