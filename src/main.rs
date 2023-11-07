@@ -1,3 +1,5 @@
+#![allow(clippy::format_collect)]
+
 #[macro_use]
 extern crate log;
 
