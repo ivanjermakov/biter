@@ -24,6 +24,7 @@ mod dht;
 mod extension;
 mod feature;
 mod hex;
+mod message;
 mod metainfo;
 mod peer;
 mod peer_metainfo;
