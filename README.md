@@ -10,6 +10,7 @@ BitTorrent client written in Rust
 | DHT Protocol                              | [BEP-5](https://www.bittorrent.org/beps/bep_0005.html)    | ✅[^2]                    |
 | Metadata from peers and magnet URLs       | [BEP-9](https://www.bittorrent.org/beps/bep_0009.html)    | ✅[^3][^4][^5]            |
 | Extension Protocol                        | [BEP-10](https://www.bittorrent.org/beps/bep_0010.html)   | ✅                        |
+| Peer Exchange (PEX)                       | [BEP-55](https://www.bittorrent.org/beps/bep_0011.html)   | 🚧                        |
 | UDP Tracker Protocol                      | [BEP-15](https://www.bittorrent.org/beps/bep_0015.html)   | ✅                        |
 | Holepunch extension                       | [BEP-55](https://www.bittorrent.org/beps/bep_0055.html)   | 🚧                        |
 
