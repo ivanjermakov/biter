@@ -64,12 +64,8 @@ impl From<Message> for Vec<u8> {
             Message::Unchoke => [u32tb(1).as_slice(), &[1]].concat(),
             Message::Interested => [u32tb(1).as_slice(), &[2]].concat(),
             Message::NotInterested => [u32tb(1).as_slice(), &[3]].concat(),
-            Message::Have { piece_index } => {
-                [u32tb(5).as_slice(), &[4], &u32tb(piece_index)].concat()
-            }
-            Message::Bitfield { bitfield } => {
-                [u32tb(1 + bitfield.len() as u32).as_slice(), &[5], &bitfield].concat()
-            }
+            Message::Have { piece_index } => [u32tb(5).as_slice(), &[4], &u32tb(piece_index)].concat(),
+            Message::Bitfield { bitfield } => [u32tb(1 + bitfield.len() as u32).as_slice(), &[5], &bitfield].concat(),
             Message::Request {
                 piece_index,
                 begin,
@@ -154,10 +150,7 @@ pub async fn read_message(stream: &mut OwnedReadHalf) -> Result<Message> {
     }
 
     let mut id_p = [0; 1];
-    stream
-        .read_exact(&mut id_p)
-        .await
-        .context("id_p read error")?;
+    stream.read_exact(&mut id_p).await.context("id_p read error")?;
     let id = u8::from_be_bytes(id_p);
 
     let msg = match id {
@@ -176,9 +169,7 @@ pub async fn read_message(stream: &mut OwnedReadHalf) -> Result<Message> {
                 4 if len == 5 => Ok(Message::Have {
                     piece_index: u32_from_slice(&payload_p[0..4])?,
                 }),
-                5 => Ok(Message::Bitfield {
-                    bitfield: payload_p,
-                }),
+                5 => Ok(Message::Bitfield { bitfield: payload_p }),
                 6 if len == 13 => Ok(Message::Request {
                     piece_index: u32_from_slice(&payload_p[0..4])?,
                     begin: u32_from_slice(&payload_p[4..8])?,

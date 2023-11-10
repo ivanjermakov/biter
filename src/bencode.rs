@@ -14,12 +14,8 @@ pub enum BencodeValue {
 impl BencodeValue {
     pub fn encode(&self) -> ByteString {
         match self {
-            BencodeValue::String(s) => {
-                [s.len().to_string().as_bytes(), ":".as_bytes(), s.as_slice()].concat()
-            }
-            BencodeValue::Int(i) => {
-                ["i".as_bytes(), i.to_string().as_bytes(), "e".as_bytes()].concat()
-            }
+            BencodeValue::String(s) => [s.len().to_string().as_bytes(), ":".as_bytes(), s.as_slice()].concat(),
+            BencodeValue::Int(i) => ["i".as_bytes(), i.to_string().as_bytes(), "e".as_bytes()].concat(),
             BencodeValue::List(l) => vec![
                 "l".as_bytes().to_vec(),
                 l.iter().flat_map(|v| v.encode()).collect(),
@@ -33,9 +29,7 @@ impl BencodeValue {
                 d.iter()
                     .flat_map(|(k, v)| {
                         [
-                            BencodeValue::String(k.as_bytes().to_vec())
-                                .encode()
-                                .as_slice(),
+                            BencodeValue::String(k.as_bytes().to_vec()).encode().as_slice(),
                             v.encode().as_slice(),
                         ]
                         .concat()
@@ -153,10 +147,7 @@ pub fn parse_int(bencoded: ByteString) -> (Option<BencodeValue>, ByteString) {
     }
     i += 1;
 
-    (
-        Some(BencodeValue::Int(int)),
-        bencoded.iter().skip(i).cloned().collect(),
-    )
+    (Some(BencodeValue::Int(int)), bencoded.iter().skip(i).cloned().collect())
 }
 
 /// Format: l<bencoded values>e
@@ -200,9 +191,7 @@ pub fn parse_dict(bencoded: ByteString) -> (Option<BencodeValue>, ByteString) {
     i += 1;
 
     while bencoded.get(i).is_some() && bencoded.get(i).filter(|c| (**c as char) == 'e').is_none() {
-        let key = if let (Some(item), left) =
-            parse_bencoded(bencoded.iter().skip(i).cloned().collect())
-        {
+        let key = if let (Some(item), left) = parse_bencoded(bencoded.iter().skip(i).cloned().collect()) {
             i = bencoded.len() - left.len();
             match item {
                 BencodeValue::String(s) => String::from_utf8_lossy(s.as_slice()).to_string(),
@@ -211,9 +200,7 @@ pub fn parse_dict(bencoded: ByteString) -> (Option<BencodeValue>, ByteString) {
         } else {
             return (None, bencoded);
         };
-        let value = if let (Some(item), left) =
-            parse_bencoded(bencoded.iter().skip(i).cloned().collect())
-        {
+        let value = if let (Some(item), left) = parse_bencoded(bencoded.iter().skip(i).cloned().collect()) {
             i = bencoded.len() - left.len();
             item
         } else {
@@ -240,10 +227,7 @@ mod test {
     #[test]
     fn should_parse_string() {
         let (str, left) = parse_bencoded(String::into_bytes("5:hello".into()));
-        assert_eq!(
-            str,
-            Some(BencodeValue::String(String::into_bytes("hello".into())))
-        );
+        assert_eq!(str, Some(BencodeValue::String(String::into_bytes("hello".into()))));
         assert!(left.is_empty());
     }
 
@@ -281,14 +265,8 @@ mod test {
             str,
             Some(BencodeValue::Dict(
                 [
-                    (
-                        "cow".into(),
-                        BencodeValue::String(String::into_bytes("moo".into()))
-                    ),
-                    (
-                        "spam".into(),
-                        BencodeValue::String(String::into_bytes("eggs".into()))
-                    )
+                    ("cow".into(), BencodeValue::String(String::into_bytes("moo".into()))),
+                    ("spam".into(), BencodeValue::String(String::into_bytes("eggs".into())))
                 ]
                 .into_iter()
                 .collect()

@@ -34,10 +34,7 @@ pub async fn download_torrent(
     let started = Instant::now();
     let (dht_peers, peer_id) = {
         let p_state = p_state.lock().await;
-        (
-            p_state.dht_peers.iter().cloned().collect(),
-            p_state.peer_id.clone(),
-        )
+        (p_state.dht_peers.iter().cloned().collect(), p_state.peer_id.clone())
     };
     let peers = find_peers(
         dht_peers,
@@ -62,10 +59,7 @@ pub async fn download_torrent(
         info_hash,
         peer_id: p_state.lock().await.peer_id.to_vec(),
         pieces,
-        peers: peers
-            .into_iter()
-            .map(|p| (p.clone(), Peer::new(p)))
-            .collect(),
+        peers: peers.into_iter().map(|p| (p.clone(), Peer::new(p))).collect(),
         status,
     };
     let state = Arc::new(Mutex::new(state));
@@ -149,12 +143,7 @@ pub async fn write_piece(piece_idx: u32, state: Arc<Mutex<State>>) -> Result<()>
             .take(f.length)
             .collect::<Vec<_>>();
         ensure!(data.len() == f.length);
-        trace!(
-            "witing {} bytes at {} of {}",
-            data.len(),
-            f.offset,
-            path.display()
-        );
+        trace!("witing {} bytes at {} of {}", data.len(), f.offset, path.display());
         let mut file = File::options().create(true).write(true).open(path).await?;
         file.seek(SeekFrom::Start(f.offset as u64)).await?;
         file.write_all(&data).await?;

@@ -20,8 +20,7 @@ impl MetainfoState {
         if self.total_size.is_none() {
             Some(0)
         } else {
-            (0..self.total_size?.div_ceil(METAINFO_PIECE_SIZE))
-                .find(|i| !self.pieces.contains_key(i))
+            (0..self.total_size?.div_ceil(METAINFO_PIECE_SIZE)).find(|i| !self.pieces.contains_key(i))
         }
     }
 }

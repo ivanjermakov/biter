@@ -179,9 +179,7 @@ fn parse_files_info(value: &BencodeValue) -> Result<Vec<PathInfo>> {
                         },
                         path,
                         md5_sum: match d.get("md5_sum") {
-                            Some(BencodeValue::String(s)) => {
-                                Some(String::from_utf8_lossy(s).to_string())
-                            }
+                            Some(BencodeValue::String(s)) => Some(String::from_utf8_lossy(s).to_string()),
                             _ => None,
                         },
                     })

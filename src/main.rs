@@ -46,9 +46,7 @@ async fn main() {
 }
 
 async fn try_main() -> Result<()> {
-    env_logger::init_from_env(
-        env_logger::Env::default().filter_or(env_logger::DEFAULT_FILTER_ENV, "info"),
-    );
+    env_logger::init_from_env(env_logger::Env::default().filter_or(env_logger::DEFAULT_FILTER_ENV, "info"));
 
     let arg = match env::args().nth(1) {
         Some(arg) => arg,
@@ -68,13 +66,11 @@ async fn try_main() -> Result<()> {
     };
 
     let state_path = expanduser("~/.local/state/biter")?;
-    let p_state = PersistState::load(&state_path)
-        .ok()
-        .unwrap_or_else(|| PersistState {
-            path: state_path,
-            peer_id: generate_peer_id(),
-            dht_peers: BTreeSet::new(),
-        });
+    let p_state = PersistState::load(&state_path).ok().unwrap_or_else(|| PersistState {
+        path: state_path,
+        peer_id: generate_peer_id(),
+        dht_peers: BTreeSet::new(),
+    });
     debug!("read persist state from file: {:?}", p_state);
     let p_state = Arc::new(Mutex::new(p_state));
 
@@ -88,11 +84,7 @@ async fn try_main() -> Result<()> {
             .1
             .to_string();
         trace!("xt: {}", xt);
-        let info_hash = xt
-            .split("urn:btih:")
-            .last()
-            .context("invalid magnet")?
-            .to_lowercase();
+        let info_hash = xt.split("urn:btih:").last().context("invalid magnet")?.to_lowercase();
         info!("magnet info hash: {}", info_hash);
         download_torrent(from_hex(&info_hash), None, &config, p_state).await?;
     } else {

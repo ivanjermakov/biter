@@ -122,9 +122,7 @@ impl TryFrom<BencodeValue> for TrackerResponse {
                 .map(|p| match p {
                     BencodeValue::Dict(p_dict) => Ok(PeerInfo {
                         ip: match p_dict.get("ip") {
-                            Some(BencodeValue::String(i)) => {
-                                String::from_utf8(i.clone()).map_err(|e| e.to_string())?
-                            }
+                            Some(BencodeValue::String(i)) => String::from_utf8(i.clone()).map_err(|e| e.to_string())?,
                             _ => return Err("'ip' missing".into()),
                         },
                         port: match p_dict.get("port") {
@@ -185,17 +183,11 @@ pub async fn tracker_request(announce: String, request: TrackerRequest) -> Resul
     } else if announce.starts_with("udp") {
         tracker_request_udp(announce, request).await
     } else {
-        Err(Error::msg(format!(
-            "unsupported tracker url scheme: {}",
-            announce
-        )))
+        Err(Error::msg(format!("unsupported tracker url scheme: {}", announce)))
     }
 }
 
-pub async fn tracker_request_http(
-    announce: String,
-    request: TrackerRequest,
-) -> Result<TrackerResponse> {
+pub async fn tracker_request_http(announce: String, request: TrackerRequest) -> Result<TrackerResponse> {
     let params = format!(
         "?{}",
         request
@@ -214,9 +206,7 @@ pub async fn tracker_request_http(
         .await
         .context("request body error")?;
     debug!("raw response: {}", String::from_utf8_lossy(&resp));
-    let resp_dict = parse_bencoded(resp.to_vec())
-        .0
-        .context("malformed response")?;
+    let resp_dict = parse_bencoded(resp.to_vec()).0.context("malformed response")?;
     debug!("response: {resp_dict:?}");
     TrackerResponse::try_from(resp_dict).map_err(Error::msg)
 }
@@ -230,10 +220,7 @@ pub async fn tracker_loop(state: Arc<Mutex<State>>) {
                 state.info_hash.clone(),
                 state.peer_id.clone(),
                 state.config.port,
-                state
-                    .tracker_response
-                    .as_ref()
-                    .map(|r| r.tracker_id.clone()),
+                state.tracker_response.as_ref().map(|r| r.tracker_id.clone()),
                 state.tracker_response.as_ref().map(|r| r.interval),
             )
         } {

@@ -9,39 +9,24 @@ use crate::{
     udp::send_udp,
 };
 
-pub async fn tracker_request_udp(
-    announce: String,
-    request: TrackerRequest,
-) -> Result<TrackerResponse> {
+pub async fn tracker_request_udp(announce: String, request: TrackerRequest) -> Result<TrackerResponse> {
     fn i32_from_slice(slice: &[u8]) -> Result<i32> {
         Ok(i32::from_be_bytes(slice.try_into()?))
     }
 
     let url = Url::parse(&announce)?;
-    let tracker_addr = format!(
-        "{}:{}",
-        url.host().expect("no host"),
-        url.port().expect("no port")
-    );
+    let tracker_addr = format!("{}:{}", url.host().expect("no host"), url.port().expect("no port"));
 
     let conn_id: i64 = 0x41727101980;
     let tx_id: i32 = thread_rng().gen();
-    let connect_pkt = [
-        &conn_id.to_be_bytes()[..],
-        &0_i32.to_be_bytes(),
-        &tx_id.to_be_bytes(),
-    ]
-    .concat();
+    let connect_pkt = [&conn_id.to_be_bytes()[..], &0_i32.to_be_bytes(), &tx_id.to_be_bytes()].concat();
     trace!("sending connect pkt: {}", hex(&connect_pkt));
     let pkt = send_udp(&tracker_addr, &connect_pkt).await?.0;
     trace!("read connect pkt: {}", hex(&pkt));
     ensure!(pkt.len() >= 16, "connect packet too short");
     let conn_id = {
         ensure!(i32_from_slice(&pkt[0..4])? == 0, "action is not connect");
-        ensure!(
-            i32_from_slice(&pkt[4..8])? == tx_id,
-            "transaction id doesn't match"
-        );
+        ensure!(i32_from_slice(&pkt[4..8])? == tx_id, "transaction id doesn't match");
         i64::from_be_bytes(pkt[8..16].try_into()?)
     };
     trace!("connection id: {}", hex(&conn_id.to_be_bytes()));
@@ -84,14 +69,8 @@ pub async fn tracker_request_udp(
     }
     ensure!(pkt.len() >= 20, "announce packet too short");
     ensure!((pkt.len() - 20) % 6 == 0, "announce packet wierd size");
-    ensure!(
-        i32::from_be_bytes(pkt[0..4].try_into()?) == 1,
-        "action is not announce"
-    );
-    ensure!(
-        i32_from_slice(&pkt[4..8])? == tx_id,
-        "transaction id doesn't match"
-    );
+    ensure!(i32::from_be_bytes(pkt[0..4].try_into()?) == 1, "action is not announce");
+    ensure!(i32_from_slice(&pkt[4..8])? == tx_id, "transaction id doesn't match");
     let addr_count = (pkt.len() - 20) / 6;
     let peers = (0..addr_count)
         .map(|i| 20 + 6 * i)

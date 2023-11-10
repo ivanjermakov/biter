@@ -137,11 +137,7 @@ impl TryFrom<&[u8]> for PeerInfo {
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         ensure!(value.len() == 6, "expected 6 byte slice");
         Ok(PeerInfo {
-            ip: value[0..4]
-                .iter()
-                .map(|b| b.to_string())
-                .collect::<Vec<_>>()
-                .join("."),
+            ip: value[0..4].iter().map(|b| b.to_string()).collect::<Vec<_>>().join("."),
             port: u16::from_be_bytes(value[4..6].try_into()?),
         })
     }

@@ -29,9 +29,7 @@ pub async fn find_peers(
     loop {
         debug!("dht queue: {} nodes", queue.len());
 
-        let chunk = queue
-            .drain(..cmp::min(queue.len(), dht_chunk))
-            .collect::<Vec<_>>();
+        let chunk = queue.drain(..cmp::min(queue.len(), dht_chunk)).collect::<Vec<_>>();
         if chunk.is_empty() {
             break;
         }
@@ -128,11 +126,7 @@ async fn find_peers_single(
     Err(Error::msg("malformed dht response"))
 }
 
-async fn dht_find_peers(
-    peer: &PeerInfo,
-    peer_id: &ByteString,
-    info_hash: ByteString,
-) -> Result<BencodeValue> {
+async fn dht_find_peers(peer: &PeerInfo, peer_id: &ByteString, info_hash: ByteString) -> Result<BencodeValue> {
     let tx_id = thread_rng()
         .sample_iter(&Alphanumeric)
         .take(2)

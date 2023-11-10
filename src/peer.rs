@@ -21,19 +21,14 @@ use crate::{
     metainfo::Metainfo,
     peer_metainfo::{PeerMetainfoMessage, METAINFO_PIECE_SIZE},
     sha1,
-    state::{
-        init_pieces, Block, Peer, PeerInfo, PeerStatus, Piece, State, TorrentStatus, BLOCK_SIZE,
-    },
+    state::{init_pieces, Block, Peer, PeerInfo, PeerStatus, Piece, State, TorrentStatus, BLOCK_SIZE},
     torrent::write_piece,
     types::ByteString,
 };
 
 /// Generate random 20 byte string, starting with -<2 byte client name><4 byte client version>-
 pub fn generate_peer_id() -> ByteString {
-    let rand = thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(12)
-        .collect::<Vec<_>>();
+    let rand = thread_rng().sample_iter(&Alphanumeric).take(12).collect::<Vec<_>>();
     ["-ER0000-".as_bytes(), &rand].concat()
 }
 
@@ -62,10 +57,7 @@ pub async fn handshake(peer: &PeerInfo, state: Arc<Mutex<State>>) -> Result<(Tcp
 
     let mut read_packet = [0; 68];
     trace!("reading handshake");
-    stream
-        .read_exact(&mut read_packet)
-        .await
-        .context("read error")?;
+    stream.read_exact(&mut read_packet).await.context("read error")?;
     let msg: Vec<u8> = read_packet.to_vec();
     trace!("peer response: {}", hex(&msg));
 
@@ -77,10 +69,7 @@ pub async fn handshake(peer: &PeerInfo, state: Arc<Mutex<State>>) -> Result<(Tcp
         ..
     } = msg
     {
-        ensure!(
-            h_info_hash.clone() == info_hash,
-            "response `info_hash` differ"
-        );
+        ensure!(h_info_hash.clone() == info_hash, "response `info_hash` differ");
         Ok((stream, msg))
     } else {
         Err(Error::msg("unexpected message"))
@@ -140,9 +129,7 @@ pub async fn handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()>
         debug!("connecting to peer: {:?}", peer);
         let mut state = state.lock().await;
         match state.peers.get_mut(&peer) {
-            Some(p) if p.status == PeerStatus::Connected => {
-                return Err(Error::msg("peer is already connected"))
-            }
+            Some(p) if p.status == PeerStatus::Connected => return Err(Error::msg("peer is already connected")),
             Some(p) => p.status = PeerStatus::Connected,
             None => {
                 let mut p = Peer::new(peer.clone());
@@ -155,13 +142,7 @@ pub async fn handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()>
     let res = do_handle_peer(peer.clone(), state.clone()).await;
 
     debug!("peer disconnected: {:?}", peer);
-    state
-        .lock()
-        .await
-        .peers
-        .get_mut(&peer)
-        .context("no peer")?
-        .status = if res.is_err() {
+    state.lock().await.peers.get_mut(&peer).context("no peer")?.status = if res.is_err() {
         PeerStatus::Disconnected
     } else {
         PeerStatus::Done
@@ -171,9 +152,7 @@ pub async fn handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()>
 }
 
 pub async fn do_handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()> {
-    let (stream, handshake) = handshake(&peer, state.clone())
-        .await
-        .context("handshake error")?;
+    let (stream, handshake) = handshake(&peer, state.clone()).await.context("handshake error")?;
     info!("successfull handshake with peer {:?}", peer);
 
     if let Some(p) = state.lock().await.peers.get_mut(&peer) {
@@ -213,11 +192,7 @@ pub async fn do_handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<
     Ok(())
 }
 
-async fn write_loop(
-    mut stream: OwnedWriteHalf,
-    peer: PeerInfo,
-    state: Arc<Mutex<State>>,
-) -> Result<()> {
+async fn write_loop(mut stream: OwnedWriteHalf, peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()> {
     loop {
         let (config, p) = {
             let state = state.lock().await;
@@ -261,11 +236,7 @@ async fn write_loop(
     }
 }
 
-async fn write_metainfo(
-    stream: &mut OwnedWriteHalf,
-    state: Arc<Mutex<State>>,
-    p: Peer,
-) -> Result<()> {
+async fn write_metainfo(stream: &mut OwnedWriteHalf, state: Arc<Mutex<State>>, p: Peer) -> Result<()> {
     if let Some(ext_id) = p.extension_map.get(&Extension::Metadata).copied() {
         let metainfo = state.lock().await.metainfo.clone();
         if let Err(m_state) = metainfo {
@@ -281,17 +252,12 @@ async fn write_metainfo(
             } else {
                 debug!("all metainfo pieces downloaded");
                 let mut state = state.lock().await;
-                let data = m_state
-                    .pieces
-                    .into_values()
-                    .flat_map(|b| b.0)
-                    .collect::<Vec<_>>();
+                let data = m_state.pieces.into_values().flat_map(|b| b.0).collect::<Vec<_>>();
                 if let (Some(info_dict), _) = parse_bencoded(data) {
                     debug!("bencoded metainfo: {:?}", info_dict);
                     // since peer metainfo protocol only transfers info dict, it needs
                     // to be inserted into fake metainfo dict to parse properly
-                    let metainfo_dict =
-                        BencodeValue::Dict([("info".into(), info_dict)].into_iter().collect());
+                    let metainfo_dict = BencodeValue::Dict([("info".into(), info_dict)].into_iter().collect());
                     match Metainfo::try_from(metainfo_dict) {
                         Ok(metainfo) => {
                             state.pieces = Some(init_pieces(&metainfo.info));
@@ -336,11 +302,7 @@ async fn write_piece_request(stream: &mut OwnedWriteHalf, piece: Piece) -> Resul
     Ok(())
 }
 
-async fn read_loop(
-    mut stream: OwnedReadHalf,
-    peer: PeerInfo,
-    state: Arc<Mutex<State>>,
-) -> Result<()> {
+async fn read_loop(mut stream: OwnedReadHalf, peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()> {
     loop {
         match read_message(&mut stream).await {
             Ok(Message::Choke) => match state.lock().await.peers.get_mut(&peer) {
@@ -386,12 +348,7 @@ async fn read_loop(
     }
 }
 
-async fn read_piece(
-    state: Arc<Mutex<State>>,
-    piece_index: u32,
-    begin: u32,
-    block: Block,
-) -> Result<()> {
+async fn read_piece(state: Arc<Mutex<State>>, piece_index: u32, begin: u32, block: Block) -> Result<()> {
     let status = state.lock().await.status.clone();
     if status != TorrentStatus::Downloading {
         debug!("not accepting pieces with status {:?}", status);
@@ -425,12 +382,7 @@ async fn read_piece(
         };
         trace!("got block {}/{}", piece.blocks.len(), total_blocks);
         if piece.blocks.len() as u32 == total_blocks {
-            let piece_data: Vec<u8> = piece
-                .blocks
-                .values()
-                .flat_map(|b| b.0.as_slice())
-                .copied()
-                .collect();
+            let piece_data: Vec<u8> = piece.blocks.values().flat_map(|b| b.0.as_slice()).copied().collect();
             let piece_hash = sha1::encode(piece_data);
             if piece_hash != piece.hash.0 {
                 warn!("piece hash does not match: {:?}", piece);
@@ -473,12 +425,7 @@ async fn read_piece(
     Ok(())
 }
 
-async fn read_extended(
-    state: Arc<Mutex<State>>,
-    peer: &PeerInfo,
-    ext_id: u8,
-    payload: Vec<u8>,
-) -> Result<()> {
+async fn read_extended(state: Arc<Mutex<State>>, peer: &PeerInfo, ext_id: u8, payload: Vec<u8>) -> Result<()> {
     trace!("got extended message: #{}", ext_id);
     match ext_id {
         0 => {
@@ -497,13 +444,7 @@ async fn read_extended(
                                 Some((ext, num))
                             })
                             .collect();
-                        state
-                            .lock()
-                            .await
-                            .peers
-                            .get_mut(peer)
-                            .context("no peer")?
-                            .extension_map = ext_map;
+                        state.lock().await.peers.get_mut(peer).context("no peer")?.extension_map = ext_map;
                     }
                     _ => return Err(Error::msg("no `m` key")),
                 }
@@ -533,10 +474,7 @@ async fn read_extended(
                             }
                         }
                         _ => {
-                            return Err(Error::msg(format!(
-                                "unhandled metadata message {:?}",
-                                msg
-                            )));
+                            return Err(Error::msg(format!("unhandled metadata message {:?}", msg)));
                         }
                     }
                 }
