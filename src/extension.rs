@@ -1,22 +1,25 @@
-use anyhow::{Context, Error};
+use anyhow::{anyhow, Context, Error};
 
 use crate::bencode::BencodeValue;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Extension {
     Metadata,
+    PeerExchange,
 }
 
 impl Extension {
     pub fn id(&self) -> usize {
         match self {
             Extension::Metadata => 1,
+            Extension::PeerExchange => 2,
         }
     }
 
     pub fn name(&self) -> String {
         match &self {
             Extension::Metadata => "ut_metadata".into(),
+            Extension::PeerExchange => "ut_pex".into(),
         }
     }
 
@@ -55,7 +58,8 @@ impl TryFrom<&str> for Extension {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
             "ut_metadata" => Ok(Extension::Metadata),
-            _ => Err(Error::msg("unknown extension")),
+            "ut_pex" => Ok(Extension::PeerExchange),
+            _ => Err(anyhow!("unknown extension")),
         }
     }
 }

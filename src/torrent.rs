@@ -68,9 +68,8 @@ pub async fn download_torrent(
     let peer_loop_h = spawn(peer_loop(state.clone()));
     // TODO: DHT discover loop
     let tracker_loop_h = spawn(tracker_loop(state.clone()));
-    debug!("connecting to peers");
+    info!("connecting to peers");
     peer_loop_h.await??;
-    trace!("aborting tracker loop");
     let _ = tracker_loop_h.ensure_abort().await;
 
     let state = state.lock().await;

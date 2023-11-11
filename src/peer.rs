@@ -41,7 +41,6 @@ pub async fn handshake(peer: &PeerInfo, state: Arc<Mutex<State>>) -> Result<(Tcp
             state.config.peer_connect_timeout,
         )
     };
-    debug!("connecting to peer {peer:?}");
     let mut stream = timeout(peer_connect_timeout, TcpStream::connect(peer.to_addr())).await??;
 
     let handshake: Vec<u8> = Message::Handshake {
@@ -442,6 +441,7 @@ async fn read_ext(state: Arc<Mutex<State>>, peer: &PeerInfo, ext_id: u8, payload
                                 Some((ext, num))
                             })
                             .collect();
+                        trace!("ext map: {:?}", ext_map);
                         state.lock().await.peers.get_mut(peer).context("no peer")?.extension_map = ext_map;
                         Ok(())
                     }
@@ -450,10 +450,13 @@ async fn read_ext(state: Arc<Mutex<State>>, peer: &PeerInfo, ext_id: u8, payload
                 _ => Err(anyhow!("parse error")),
             }
         }
-        _ => match Extension::try_from(ext_id as usize) {
-            Ok(Extension::Metadata) => read_ext_metadata(state.clone(), payload).await,
-            _ => Err(anyhow!("unsupported extension id: #{}", ext_id)),
-        },
+        _ => {
+            debug!("got extended message #{ext_id}");
+            match Extension::try_from(ext_id as usize) {
+                Ok(Extension::Metadata) => read_ext_metadata(state, payload).await,
+                _ => Err(anyhow!("unsupported extension id: #{}", ext_id)),
+            }
+        }
     }
 }
 
