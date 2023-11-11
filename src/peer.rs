@@ -1,4 +1,4 @@
-use anyhow::{ensure, Context, Error, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::sync::Arc;
 use tokio::{
@@ -61,9 +61,7 @@ pub async fn handshake(peer: &PeerInfo, state: Arc<Mutex<State>>) -> Result<(Tcp
     let msg: Vec<u8> = read_packet.to_vec();
     trace!("peer response: {}", hex(&msg));
 
-    let msg = Message::try_from(msg)
-        .map_err(Error::msg)
-        .context("handshake parse error")?;
+    let msg = Message::try_from(msg).context("handshake parse error")?;
     if let Message::Handshake {
         info_hash: ref h_info_hash,
         ..
@@ -72,7 +70,7 @@ pub async fn handshake(peer: &PeerInfo, state: Arc<Mutex<State>>) -> Result<(Tcp
         ensure!(h_info_hash.clone() == info_hash, "response `info_hash` differ");
         Ok((stream, msg))
     } else {
-        Err(Error::msg("unexpected message"))
+        Err(anyhow!("unexpected message"))
     }
 }
 
@@ -129,7 +127,7 @@ pub async fn handle_peer(peer: PeerInfo, state: Arc<Mutex<State>>) -> Result<()>
         debug!("connecting to peer: {:?}", peer);
         let mut state = state.lock().await;
         match state.peers.get_mut(&peer) {
-            Some(p) if p.status == PeerStatus::Connected => return Err(Error::msg("peer is already connected")),
+            Some(p) if p.status == PeerStatus::Connected => return Err(anyhow!("peer is already connected")),
             Some(p) => p.status = PeerStatus::Connected,
             None => {
                 let mut p = Peer::new(peer.clone());
@@ -333,8 +331,8 @@ async fn read_loop(mut stream: OwnedReadHalf, peer: PeerInfo, state: Arc<Mutex<S
                 ext_id,
                 payload: Some(payload),
             }) => {
-                if let Err(e) = read_extended(state.clone(), &peer, ext_id, payload).await {
-                    debug!("{e:#}");
+                if let Err(e) = read_ext(state.clone(), &peer, ext_id, payload).await {
+                    debug!("read extended error: {e:#}");
                 }
             }
             Ok(msg) => {
@@ -355,7 +353,7 @@ async fn read_piece(state: Arc<Mutex<State>>, piece_index: u32, begin: u32, bloc
         return Ok(());
     }
     if begin % BLOCK_SIZE != 0 {
-        return Err(Error::msg("block begin is not a multiple of block size"));
+        return Err(anyhow!("block begin is not a multiple of block size"));
     }
     let block_index = begin / BLOCK_SIZE;
 
@@ -425,13 +423,13 @@ async fn read_piece(state: Arc<Mutex<State>>, piece_index: u32, begin: u32, bloc
     Ok(())
 }
 
-async fn read_extended(state: Arc<Mutex<State>>, peer: &PeerInfo, ext_id: u8, payload: Vec<u8>) -> Result<()> {
-    trace!("got extended message: #{}", ext_id);
+async fn read_ext(state: Arc<Mutex<State>>, peer: &PeerInfo, ext_id: u8, payload: Vec<u8>) -> Result<()> {
+    debug!("got extended message: #{}", ext_id);
     match ext_id {
         0 => {
             debug!("got extended handshake");
-            if let Some(BencodeValue::Dict(dict)) = parse_bencoded(payload).0 {
-                match dict.get("m") {
+            match parse_bencoded(payload).0 {
+                Some(BencodeValue::Dict(dict)) => match dict.get("m") {
                     Some(BencodeValue::Dict(m_d)) => {
                         let ext_map = m_d
                             .iter()
@@ -439,49 +437,53 @@ async fn read_extended(state: Arc<Mutex<State>>, peer: &PeerInfo, ext_id: u8, pa
                                 let ext = Extension::try_from(k.as_str()).ok()?;
                                 let num = match v {
                                     BencodeValue::Int(i) => *i as u8,
-                                    _ => return Err(Error::msg("ext id is not an int")).ok(),
+                                    _ => return Err(anyhow!("ext id is not an int")).ok(),
                                 };
                                 Some((ext, num))
                             })
                             .collect();
                         state.lock().await.peers.get_mut(peer).context("no peer")?.extension_map = ext_map;
+                        Ok(())
                     }
-                    _ => return Err(Error::msg("no `m` key")),
-                }
-            };
+                    _ => Err(anyhow!("no `m` key")),
+                },
+                _ => Err(anyhow!("parse error")),
+            }
         }
         _ => match Extension::try_from(ext_id as usize) {
-            Ok(Extension::Metadata) => match PeerMetainfoMessage::try_from(payload) {
-                Ok(msg) => {
-                    debug!("got metadata message {:?}", msg);
-                    match msg {
-                        PeerMetainfoMessage::Data {
-                            piece,
-                            total_size,
-                            data,
-                        } => {
-                            let mut state = state.lock().await;
-                            if let Err(m_state) = state.metainfo.as_mut() {
-                                m_state.pieces.insert(piece, data);
-                                m_state.total_size = Some(total_size);
-                                debug!(
-                                    "new metainfo piece {}/{}",
-                                    m_state.pieces.len(),
-                                    total_size.div_ceil(METAINFO_PIECE_SIZE)
-                                );
-                            } else {
-                                return Err(Error::msg("metainfo already set"));
-                            }
-                        }
-                        _ => {
-                            return Err(Error::msg(format!("unhandled metadata message {:?}", msg)));
-                        }
+            Ok(Extension::Metadata) => read_ext_metadata(state.clone(), payload).await,
+            _ => Err(anyhow!("unsupported extension id: #{}", ext_id)),
+        },
+    }
+}
+
+async fn read_ext_metadata(state: Arc<Mutex<State>>, payload: Vec<u8>) -> Result<()> {
+    match PeerMetainfoMessage::try_from(payload) {
+        Ok(msg) => {
+            debug!("got metadata message {:?}", msg);
+            match msg {
+                PeerMetainfoMessage::Data {
+                    piece,
+                    total_size,
+                    data,
+                } => {
+                    let mut state = state.lock().await;
+                    if let Err(m_state) = state.metainfo.as_mut() {
+                        m_state.pieces.insert(piece, data);
+                        m_state.total_size = Some(total_size);
+                        debug!(
+                            "new metainfo piece {}/{}",
+                            m_state.pieces.len(),
+                            total_size.div_ceil(METAINFO_PIECE_SIZE)
+                        );
+                        Ok(())
+                    } else {
+                        Err(anyhow!("metainfo already set"))
                     }
                 }
-                Err(e) => return Err(Error::msg(format!("{e:#}"))),
-            },
-            Err(..) => return Err(Error::msg(format!("unsupported extension id: #{}", ext_id))),
-        },
-    };
-    Ok(())
+                _ => Err(anyhow!("unhandled metadata message {:?}", msg)),
+            }
+        }
+        Err(e) => Err(anyhow!("{e:#}")),
+    }
 }

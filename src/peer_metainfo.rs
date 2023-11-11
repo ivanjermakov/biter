@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Error};
+use anyhow::{anyhow, Context, Error};
 
 use crate::{
     bencode::{parse_bencoded, BencodeValue},
@@ -75,25 +75,25 @@ impl TryFrom<Vec<u8>> for PeerMetainfoMessage {
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
         let (dict, data) = match parse_bencoded(value) {
             (Some(BencodeValue::Dict(d)), left) => (d, left),
-            _ => return Err(Error::msg("parse error")),
+            _ => return Err(anyhow!("parse error")),
         };
         let msg_type = dict.get("msg_type").context("no msg_type")?;
         Ok(match msg_type {
             BencodeValue::Int(0) => {
                 let piece = match dict.get("piece").context("no piece")? {
                     BencodeValue::Int(i) => *i as usize,
-                    _ => return Err(Error::msg("unexpected piece")),
+                    _ => return Err(anyhow!("unexpected piece")),
                 };
                 PeerMetainfoMessage::Request { piece }
             }
             BencodeValue::Int(1) => {
                 let piece = match dict.get("piece").context("no piece")? {
                     BencodeValue::Int(i) => *i as usize,
-                    _ => return Err(Error::msg("unexpected piece")),
+                    _ => return Err(anyhow!("unexpected piece")),
                 };
                 let total_size = match dict.get("total_size").context("no total_size")? {
                     BencodeValue::Int(i) => *i as usize,
-                    _ => return Err(Error::msg("unexpected total_size")),
+                    _ => return Err(anyhow!("unexpected total_size")),
                 };
                 PeerMetainfoMessage::Data {
                     piece,
@@ -102,7 +102,7 @@ impl TryFrom<Vec<u8>> for PeerMetainfoMessage {
                 }
             }
             BencodeValue::Int(2) => PeerMetainfoMessage::Reject,
-            _ => return Err(Error::msg("unexpected msg_type")),
+            _ => return Err(anyhow!("unexpected msg_type")),
         })
     }
 }

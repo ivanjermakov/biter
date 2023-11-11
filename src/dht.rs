@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Error, Result};
+use anyhow::{anyhow, Context, Result};
 use futures::{stream::FuturesUnordered, StreamExt};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use tokio::time::timeout;
@@ -89,7 +89,7 @@ async fn find_peers_single(
     .await??;
     let dict = match res {
         BencodeValue::Dict(dict) => dict,
-        _ => return Err(Error::msg("response is not a dict")),
+        _ => return Err(anyhow!("response is not a dict")),
     };
 
     if matches!(dict.get("y"),  Some(BencodeValue::String(s)) if s == "e".as_bytes()) {
@@ -97,7 +97,7 @@ async fn find_peers_single(
     }
     let r_dict = match dict.get("r") {
         Some(BencodeValue::Dict(d)) => d,
-        _ => return Err(Error::msg("no response dict")),
+        _ => return Err(anyhow!("no response dict")),
     };
 
     if let Some(BencodeValue::List(vs)) = r_dict.get("values") {
@@ -106,7 +106,7 @@ async fn find_peers_single(
             .map(|b_v| {
                 let v = match b_v {
                     BencodeValue::String(s) => s,
-                    _ => return Err(Error::msg("value is not a string")),
+                    _ => return Err(anyhow!("value is not a string")),
                 };
                 PeerInfo::try_from(v.as_slice())
             })
@@ -123,7 +123,7 @@ async fn find_peers_single(
             .collect::<Result<Vec<PeerInfo>>>()?));
     }
 
-    Err(Error::msg("malformed dht response"))
+    Err(anyhow!("malformed dht response"))
 }
 
 async fn dht_find_peers(peer: &PeerInfo, peer_id: &ByteString, info_hash: ByteString) -> Result<BencodeValue> {

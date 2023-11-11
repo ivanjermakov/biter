@@ -1,5 +1,5 @@
 use crate::{hex::hex, state::Block, types::ByteString};
-use anyhow::{Context, Error, Result};
+use anyhow::{anyhow, Context, Error, Result};
 use tokio::{io::AsyncReadExt, net::tcp::OwnedReadHalf};
 
 #[derive(Debug, Clone)]
@@ -112,19 +112,19 @@ impl From<Message> for Vec<u8> {
 }
 
 impl TryFrom<Vec<u8>> for Message {
-    type Error = String;
+    type Error = Error;
 
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
         if value.len() != 68 {
-            return Err(format!("invalid handshake len: {}", value.len()));
+            return Err(anyhow!("invalid handshake len: {}", value.len()));
         }
         let pstrlen = &value.as_slice()[0..1];
         if pstrlen != [19u8] {
-            return Err(format!("invalid pstrlen: {}", hex(pstrlen)));
+            return Err(anyhow!("invalid pstrlen: {}", hex(pstrlen)));
         }
         let pstr = &value.as_slice()[1..20];
         if pstr != "BitTorrent protocol".as_bytes() {
-            return Err(format!("invalid pstr: {}", hex(pstr)));
+            return Err(anyhow!("invalid pstr: {}", hex(pstr)));
         }
         Ok(Message::Handshake {
             info_hash: value.as_slice()[28..48].to_vec(),
@@ -158,7 +158,7 @@ pub async fn read_message(stream: &mut OwnedReadHalf) -> Result<Message> {
         1 if len == 1 => Ok(Message::Unchoke),
         2 if len == 1 => Ok(Message::Interested),
         3 if len == 1 => Ok(Message::NotInterested),
-        _ if len == 1 => Err(Error::msg("unexpected message of size 1")),
+        _ if len == 1 => Err(anyhow!("unexpected message of size 1")),
         _ => {
             let mut payload_p = vec![0; len as usize - 1];
             stream
@@ -197,10 +197,10 @@ pub async fn read_message(stream: &mut OwnedReadHalf) -> Result<Message> {
                     };
                     Ok(Message::Extended { ext_id, payload })
                 }
-                _ => Err(Error::msg(format!(
+                _ => Err(anyhow!(
                     "unexpected message: {}",
                     hex(&[len_p.as_ref(), &id_p, payload_p.as_slice()].concat())
-                ))),
+                )),
             }
         }
     }?;

@@ -1,7 +1,7 @@
 use core::fmt;
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
-use anyhow::{Context, Error, Result};
+use anyhow::{anyhow, Context, Error, Result};
 use reqwest::Client;
 use tokio::{spawn, sync::Mutex, time::sleep};
 use urlencoding::encode_binary;
@@ -109,12 +109,12 @@ pub enum TrackerResponse {
 }
 
 impl TryFrom<BencodeValue> for TrackerResponse {
-    type Error = String;
+    type Error = Error;
 
     fn try_from(value: BencodeValue) -> Result<Self, Self::Error> {
         let dict = match value {
             BencodeValue::Dict(d) => d,
-            _ => return Err("response is not a dict".into()),
+            _ => return Err(anyhow!("response is not a dict")),
         };
         let peers = match dict.get("peers") {
             Some(BencodeValue::List(ps)) => ps
@@ -122,24 +122,24 @@ impl TryFrom<BencodeValue> for TrackerResponse {
                 .map(|p| match p {
                     BencodeValue::Dict(p_dict) => Ok(PeerInfo {
                         ip: match p_dict.get("ip") {
-                            Some(BencodeValue::String(i)) => String::from_utf8(i.clone()).map_err(|e| e.to_string())?,
-                            _ => return Err("'ip' missing".into()),
+                            Some(BencodeValue::String(i)) => String::from_utf8(i.clone())?,
+                            _ => return Err(anyhow!("'ip' missing")),
                         },
                         port: match p_dict.get("port") {
                             Some(BencodeValue::Int(p)) => *p as u16,
-                            _ => return Err("'port' missing".into()),
+                            _ => return Err(anyhow!("'port' missing")),
                         },
                     }),
-                    _ => Err("'peers' missing".into()),
+                    _ => Err(anyhow!("'peers' missing")),
                 })
-                .collect::<Result<_, String>>()?,
-            _ => return Err("'peers' missing".into()),
+                .collect::<Result<_, _>>()?,
+            _ => return Err(anyhow!("'peers' missing")),
         };
         let resp = TrackerResponse::Success(TrackerResponseSuccess {
             peers,
             interval: match dict.get("interval") {
                 Some(BencodeValue::Int(p)) => *p,
-                _ => return Err("'interval' missing".into()),
+                _ => return Err(anyhow!("'interval' missing")),
             },
             warning_message: dict.get("warning_message").and_then(|m| match m {
                 BencodeValue::String(s) => Some(String::from_utf8_lossy(s).into()),
@@ -183,7 +183,7 @@ pub async fn tracker_request(announce: String, request: TrackerRequest) -> Resul
     } else if announce.starts_with("udp") {
         tracker_request_udp(announce, request).await
     } else {
-        Err(Error::msg(format!("unsupported tracker url scheme: {}", announce)))
+        Err(anyhow!("unsupported tracker url scheme: {}", announce))
     }
 }
 
@@ -208,7 +208,7 @@ pub async fn tracker_request_http(announce: String, request: TrackerRequest) -> 
     debug!("raw response: {}", String::from_utf8_lossy(&resp));
     let resp_dict = parse_bencoded(resp.to_vec()).0.context("malformed response")?;
     debug!("response: {resp_dict:?}");
-    TrackerResponse::try_from(resp_dict).map_err(Error::msg)
+    TrackerResponse::try_from(resp_dict)
 }
 
 pub async fn tracker_loop(state: Arc<Mutex<State>>) {

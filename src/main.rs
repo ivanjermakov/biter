@@ -3,7 +3,7 @@
 #[macro_use]
 extern crate log;
 
-use anyhow::{Context, Error, Result};
+use anyhow::{anyhow, Context, Result};
 use expanduser::expanduser;
 use reqwest::Url;
 use std::{collections::BTreeSet, env, path::PathBuf, process, sync::Arc, time::Duration};
@@ -50,7 +50,7 @@ async fn try_main() -> Result<()> {
 
     let arg = match env::args().nth(1) {
         Some(arg) => arg,
-        _ => return Err(Error::msg("no torrent file/magnet specified")),
+        _ => return Err(anyhow!("no torrent file/magnet specified")),
     };
 
     let config = Config {

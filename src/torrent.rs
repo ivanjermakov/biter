@@ -1,4 +1,4 @@
-use anyhow::{ensure, Context, Error, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use std::collections::BTreeSet;
 use std::io::SeekFrom;
 use std::path::Path;
@@ -87,7 +87,7 @@ pub async fn download_torrent(
         .filter(|p| p.status != TorrentStatus::Saved)
         .count();
     if incomplete > 0 {
-        return Err(Error::msg(format!("{} incomplete pieces", incomplete)));
+        return Err(anyhow!("{} incomplete pieces", incomplete));
     }
 
     let mut dht_peers: BTreeSet<PeerInfo> = state
@@ -165,15 +165,12 @@ pub fn metainfo_from_path(path: &Path) -> Result<(ByteString, Metainfo)> {
 pub fn metainfo_from_str(bencoded: ByteString) -> Result<(ByteString, Metainfo)> {
     let metainfo_dict = match parse_bencoded(bencoded) {
         (Some(metadata), left) if left.is_empty() => metadata,
-        _ => return Err(Error::msg("metadata file parsing error")),
+        _ => return Err(anyhow!("metadata file parsing error")),
     };
     debug!("metainfo dict: {metainfo_dict:?}");
     let info_hash = get_info_hash(&metainfo_dict)?;
     info!("info hash: {}", hex(&info_hash));
-    let metainfo = match Metainfo::try_from(metainfo_dict) {
-        Ok(info) => info,
-        Err(e) => return Err(Error::msg(e).context("metadata file structure error")),
-    };
+    let metainfo = Metainfo::try_from(metainfo_dict).context("metadata file structure error")?;
     info!("metainfo: {metainfo:?}");
     Ok((info_hash, metainfo))
 }
@@ -183,6 +180,6 @@ pub fn get_info_hash(value: &BencodeValue) -> Result<ByteString> {
         let str = d.get("info").context("no 'info' key")?.encode();
         Ok(sha1::encode(str))
     } else {
-        Err(Error::msg("value is not a dict"))
+        Err(anyhow!("value is not a dict"))
     }
 }
