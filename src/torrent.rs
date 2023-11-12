@@ -59,7 +59,17 @@ pub async fn download_torrent(
         info_hash,
         peer_id: p_state.lock().await.peer_id.to_vec(),
         pieces,
-        peers: peers.into_iter().map(|p| (p.clone(), Peer::new(p))).collect(),
+        peers: peers
+            .into_iter()
+            .map(Peer::new)
+            .map(|mut p| {
+                if !config.init_choked {
+                    p.choked = false
+                }
+                p
+            })
+            .map(|p| (p.info.clone(), p))
+            .collect(),
         status,
     };
     let state = Arc::new(Mutex::new(state));

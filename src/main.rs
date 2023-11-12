@@ -36,6 +36,7 @@ mod tracker;
 mod tracker_udp;
 mod types;
 mod udp;
+mod utp;
 
 #[tokio::main]
 async fn main() {
@@ -55,7 +56,8 @@ async fn try_main() -> Result<()> {
 
     let config = Config {
         port: 6881,
-        respect_choke: false,
+        init_choked: false,
+        respect_choke: true,
         choke_wait: Duration::from_secs(10),
         reconnect_wait: Duration::from_secs(20),
         downloaded_check_wait: Duration::from_secs(1),
